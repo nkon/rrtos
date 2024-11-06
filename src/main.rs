@@ -4,7 +4,8 @@
 #![no_std]
 #![no_main]
 
-use cortex_m_rt::entry;
+use cortex_m::peripheral::syst::SystClkSource;
+use cortex_m_rt::{entry, exception};
 use defmt::*;
 use defmt_rtt as _;
 use embedded_hal::digital::OutputPin;
@@ -44,7 +45,7 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    // let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
     let pins = Pins::new(
         pac.IO_BANK0,
@@ -64,13 +65,30 @@ fn main() -> ! {
     // in series with the LED.
     let mut led_pin = pins.gpio25.into_push_pull_output();
 
+    let mut syst = core.SYST;
+    syst.set_clock_source(SystClkSource::Core);
+    syst.set_reload(clocks.system_clock.freq().to_kHz());
+    syst.clear_current();
+    syst.enable_counter();
+    syst.enable_interrupt();
+
     loop {
-        info!("on!");
+        // info!("on!");
         led_pin.set_high().unwrap();
-        delay.delay_ms(500);
-        info!("off!");
+        // delay.delay_ms(500);
+        // info!("off!");
         led_pin.set_low().unwrap();
-        delay.delay_ms(500);
+        // delay.delay_ms(500);
+    }
+}
+
+#[exception]
+fn SysTick() {
+    static mut COUNT: u32 = 0;
+    *COUNT += 1;
+    if *COUNT == 1000 {
+        info!("SysTick");
+        *COUNT = 0;
     }
 }
 
