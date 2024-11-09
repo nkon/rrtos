@@ -4,6 +4,8 @@
 #![no_std]
 #![no_main]
 
+use core::arch::asm;
+
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use defmt::*;
@@ -90,6 +92,31 @@ fn SysTick() {
         info!("SysTick");
         *COUNT = 0;
     }
+}
+
+#[exception]
+fn SVCall() {
+    unsafe {
+        asm!(
+            "ldr r1, =0xfffffff9", //If lr(link register) == 0xfffffff9 -> called from kernel
+            "cmp lr, r1",
+            "bne 1f",
+            "movs r0, #1",
+            "msr CONTROL, r0",     //CONTROL.nPRIV <= 1; set unprivileged
+            "isb",                 // Instruction Synchronization Barrier
+            "ldr r1, =0xfffffffd", // 0xffff_fffc + 0x01(call with Thumb inst.)
+            "mov lr, r1",
+            "bx lr",
+            "1:",
+            "movs r0, #0",
+            "msr CONTROL, r0", //CONTROL.nPRIV <= 0; set privileged
+            "isb",
+            "ldr r1, =0xfffffff9", // 0xffff_fff8 + 0x01(call with Thumb inst.
+            "mov lr, r1",
+            "bx lr",
+            options(noreturn),
+        );
+    };
 }
 
 // End of file

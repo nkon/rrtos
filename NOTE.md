@@ -56,7 +56,7 @@ pub static BOOT_LOADER: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 [https://docs.rust-embedded.org/book/start/exceptions.html]
 
 * 初期設定
-```
+```rust
 let mut syst = core.SYST;                              // SYSTモジュールを得る
                                                        // core.SYSTがdelayと競合しているのでそちらをコメントアウト
 syst.set_clock_source(SystClkSource::Core);            // クロック源にコアクロックを設定
@@ -67,8 +67,8 @@ syst.enable_interrupt();
 ```
 
 * ハンドラ
-```
-#[exception]                   // SysTickの場合は割り込み(interrupt)ではなく例外(exeption)ハンドラ
+```rust
+#[exception]                   // SysTickの場合は割り込み(interrupt)ではなく例外(exception)ハンドラ
 fn SysTick() {
     static mut COUNT: u32 = 0; // 例外ハンドラ中では非再入が保証されているのでsafeでもstatic mutが使える
     *COUNT += 1;
@@ -76,5 +76,41 @@ fn SysTick() {
         info!("SysTick");
         *COUNT = 0;
     }
+}
+```
+
+# Create SVCall handler
+
+* [Cortex-M0+ Technical Reference Manual](https://developer.arm.com/documentation/ddi0484/c/?lang=en)
+* [Armv6-M Architecture Reference Manual](https://developer.arm.com/documentation/ddi0419/e/?lang=en)
+
+参考書「Rustで始める自作組み込みOS入門」はWioTerminalを使っている。MPUはATSAMD51P19、アーキテクチャはCortex-M4F(ARMv7-M)で、Thumb2 ISA(thumbv7em)が使える。
+
+本記事のターゲットボードはRasPico RP2040で、アーキテクチャはCortex-M0+(ARMv6-M)、Thuumb ISA(thumbv6m)しか使えない。アセンブラの記述やMPUの制御が異なるので注意が
+
+```rust
+#[exception]
+fn SVCall() {
+    unsafe {
+        asm!(
+            "ldr r1, =0xfffffff9", //If lr(link register) == 0xfffffff9 -> called from kernel
+            "cmp lr, r1",
+            "bne 1f",              // lr を 0xfffffff9 と比較して、違えば後方のラベル1にジャンプ
+            "movs r0, #1",         // thumbv6m では mov命令はなく movs命令しかない
+            "msr CONTROL, r0",     // CONTROL.nPRIV <= 1; set unprivileged
+            "isb",                 // Instruction Synchronization Barrier
+            "ldr r1, =0xfffffffd", // 0xffff_fffc + 0x01(call with Thumb inst.)
+            "mov lr, r1",          // thumbv6m の mov は8ビットの即値しか取れない→いったんr1にldrする
+            "bx lr",               // lrをカーネルスタックにセット
+            "1:",                  // カーネルスタックから呼ばれた場合
+            "movs r0, #0",
+            "msr CONTROL, r0",     //CONTROL.nPRIV <= 0; set privileged
+            "isb",
+            "ldr r1, =0xfffffff9", // 0xffff_fff8 + 0x01(call with Thumb inst.
+            "mov lr, r1",
+            "bx lr",               // lrをアプリケーションスタックにセット
+            options(noreturn),
+        );
+    };
 }
 ```
