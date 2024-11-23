@@ -4,19 +4,16 @@
 #![no_std]
 #![no_main]
 
-use core::arch::asm;
-
-use cortex_m::peripheral::syst::SystClkSource;
-use cortex_m_rt::{entry, exception};
+use core::{
+    arch::asm,
+    mem::{size_of, MaybeUninit},
+};
+use cortex_m::{asm::nop, peripheral::syst::SystClkSource};
+use cortex_m_rt::{entry, exception, pre_init, ExceptionFrame};
 use defmt::*;
 use defmt_rtt as _;
 use embedded_hal::digital::OutputPin;
 use panic_probe as _;
-
-#[link_section = ".boot2"]
-#[used]
-pub static BOOT_LOADER: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
-
 use rp2040_hal::{
     clocks::{init_clocks_and_plls, Clock},
     gpio::Pins,
@@ -24,6 +21,74 @@ use rp2040_hal::{
     sio::Sio,
     watchdog::Watchdog,
 };
+
+#[link_section = ".boot2"]
+#[used]
+pub static BOOT_LOADER: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
+
+const STACK_SIZE: usize = 1024;
+const NTHREADS: usize = 1;
+
+#[repr(align(8))]
+struct AlignedStack(MaybeUninit<[[u8; STACK_SIZE]; NTHREADS]>);
+
+#[link_section = ".uninit.STACKS"]
+static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
+
+#[pre_init]
+unsafe fn pre_init() {
+    let ptr = APP_STACK.0.as_ptr() as usize + STACK_SIZE - size_of::<ExceptionFrame>();
+    let exception_frame: &mut ExceptionFrame = &mut *(ptr as *mut ExceptionFrame);
+
+    exception_frame.set_r0(0);
+    exception_frame.set_r1(0);
+    exception_frame.set_r2(0);
+    exception_frame.set_r3(0);
+    exception_frame.set_r12(0);
+    exception_frame.set_lr(0);
+    exception_frame.set_pc(app_main as usize as u32);
+    exception_frame.set_xpsr(0x0100_0000); // Set EPSR.T bit
+}
+
+fn app_main() -> ! {
+    info!("app_main()");
+    info!("CONTROL {:02b}", cortex_m::register::control::read().bits());
+    unsafe {
+        asm!("svc 0");
+    }
+    info!("app_main() continue");
+    loop {
+        nop();
+    }
+}
+
+#[inline(never)]
+fn execute_process(sp: u32) {
+    unsafe {
+        asm!(
+            "push {{r4, r5, r6, r7, lr}}",
+            "msr psp, {sp}",
+            "svc 0",
+            "pop {{r4, r5, r6, r7, pc}}",
+            sp = in(reg) sp,
+        );
+    };
+}
+
+fn print_stack_frame(sp: u32) {
+    let exception_frame = unsafe { *(sp as *const ExceptionFrame) };
+    info!("frame({:08x}) r0:{:08x} r1:{:08x} r2:{:08x} r3:{:08x} r12:{:08x} lr:{:08x} pc:{:08x} xpsr:{:08x}",
+        sp,
+        exception_frame.r0(),
+        exception_frame.r1(),
+        exception_frame.r2(),
+        exception_frame.r3(),
+        exception_frame.r12(),
+        exception_frame.lr(),
+        exception_frame.pc(),
+        exception_frame.xpsr()
+    );
+}
 
 #[entry]
 fn main() -> ! {
@@ -74,6 +139,14 @@ fn main() -> ! {
     syst.enable_counter();
     syst.enable_interrupt();
 
+    unsafe {
+        let ptr = APP_STACK.0.as_ptr() as usize + STACK_SIZE - size_of::<ExceptionFrame>();
+        print_stack_frame(ptr as u32);
+        execute_process(ptr as u32);
+    }
+
+    info!("kernel");
+
     loop {
         // info!("on!");
         led_pin.set_high().unwrap();
@@ -94,25 +167,32 @@ fn SysTick() {
     }
 }
 
+// ARMv6M B1.5.8 Exception return behavior
+const _RETURN_TO_HANDLER_MSP: u32 = 0xFFFFFFF1; // Return to Handler Mode. Exception return gets state from the Main stack. On return execution uses the Main Stack.
+const _RETURN_TO_THREAD_MSP: u32 = 0xFFFFFFF9; // Return to Thread Mode. Exception return gets state from the Main stack. On return execution uses the Main Stack.
+const _RETURN_TO_THREAD_PSP: u32 = 0xFFFFFFFD; // Return to Thread Mode. Exception return gets state from the Process stack. On return execution uses the Process Stack
+
 #[exception]
 fn SVCall() {
+    // info!("SVCall: lr={:x}", cortex_m::register::lr::read());
     unsafe {
         asm!(
-            "ldr r1, =0xfffffff9", //If lr(link register) == 0xfffffff9 -> called from kernel
-            "cmp lr, r1",
+            "pop {{r6, r7}}", // Adjust SP from function prelude "push {r7, lr};add r7, sp, #0x0"
+            "ldr r4, =0xfffffff9", //If lr(link register) == 0xfffffff9 -> called from kernel
+            "cmp lr, r4",
             "bne 1f",
-            "movs r0, #1",
+            "movs r0, #0x3",
             "msr CONTROL, r0",     //CONTROL.nPRIV <= 1; set unprivileged
             "isb",                 // Instruction Synchronization Barrier
-            "ldr r1, =0xfffffffd", // 0xffff_fffc + 0x01(call with Thumb inst.)
-            "mov lr, r1",
+            "ldr r4, =0xfffffffd", // Return to Thread+PSP
+            "mov lr, r4",
             "bx lr",
             "1:",
             "movs r0, #0",
             "msr CONTROL, r0", //CONTROL.nPRIV <= 0; set privileged
             "isb",
-            "ldr r1, =0xfffffff9", // 0xffff_fff8 + 0x01(call with Thumb inst.
-            "mov lr, r1",
+            "ldr r4, =0xfffffff9", // Return to Thread+MSP
+            "mov lr, r4",
             "bx lr",
             options(noreturn),
         );

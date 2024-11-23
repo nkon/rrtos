@@ -3,6 +3,9 @@
 .gdb_history
 Cargo.lock
 target/
+downloads/
+
+asm.S
 
 # editor files
 .vscode/*
