@@ -4,12 +4,9 @@
 #![no_std]
 #![no_main]
 
-use core::{
-    arch::asm,
-    mem::{size_of, MaybeUninit},
-};
+use core::{arch::asm, mem::MaybeUninit, ptr::addr_of_mut};
 use cortex_m::{asm::nop, peripheral::syst::SystClkSource};
-use cortex_m_rt::{entry, exception, pre_init, ExceptionFrame};
+use cortex_m_rt::{entry, exception};
 use defmt::*;
 use defmt_rtt as _;
 use embedded_hal::digital::OutputPin;
@@ -21,34 +18,11 @@ use rp2040_hal::{
     sio::Sio,
     watchdog::Watchdog,
 };
+use rrtos::process::{AlignedStack, Process};
 
 #[link_section = ".boot2"]
 #[used]
 pub static BOOT_LOADER: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
-
-const STACK_SIZE: usize = 1024;
-const NTHREADS: usize = 1;
-
-#[repr(align(8))]
-struct AlignedStack(MaybeUninit<[[u8; STACK_SIZE]; NTHREADS]>);
-
-#[link_section = ".uninit.STACKS"]
-static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
-
-#[pre_init]
-unsafe fn pre_init() {
-    let ptr = APP_STACK.0.as_ptr() as usize + STACK_SIZE - size_of::<ExceptionFrame>();
-    let exception_frame: &mut ExceptionFrame = &mut *(ptr as *mut ExceptionFrame);
-
-    exception_frame.set_r0(0);
-    exception_frame.set_r1(0);
-    exception_frame.set_r2(0);
-    exception_frame.set_r3(0);
-    exception_frame.set_r12(0);
-    exception_frame.set_lr(0);
-    exception_frame.set_pc(app_main as usize as u32);
-    exception_frame.set_xpsr(0x0100_0000); // Set EPSR.T bit
-}
 
 fn app_main() -> ! {
     info!("app_main()");
@@ -60,34 +34,6 @@ fn app_main() -> ! {
     loop {
         nop();
     }
-}
-
-#[inline(never)]
-fn execute_process(sp: u32) {
-    unsafe {
-        asm!(
-            "push {{r4, r5, r6, r7, lr}}",
-            "msr psp, {sp}",
-            "svc 0",
-            "pop {{r4, r5, r6, r7, pc}}",
-            sp = in(reg) sp,
-        );
-    };
-}
-
-fn print_stack_frame(sp: u32) {
-    let exception_frame = unsafe { *(sp as *const ExceptionFrame) };
-    info!("frame({:08x}) r0:{:08x} r1:{:08x} r2:{:08x} r3:{:08x} r12:{:08x} lr:{:08x} pc:{:08x} xpsr:{:08x}",
-        sp,
-        exception_frame.r0(),
-        exception_frame.r1(),
-        exception_frame.r2(),
-        exception_frame.r3(),
-        exception_frame.r12(),
-        exception_frame.lr(),
-        exception_frame.pc(),
-        exception_frame.xpsr()
-    );
 }
 
 #[entry]
@@ -139,11 +85,10 @@ fn main() -> ! {
     syst.enable_counter();
     syst.enable_interrupt();
 
-    unsafe {
-        let ptr = APP_STACK.0.as_ptr() as usize + STACK_SIZE - size_of::<ExceptionFrame>();
-        print_stack_frame(ptr as u32);
-        execute_process(ptr as u32);
-    }
+    #[link_section = ".uninit.STACKS"]
+    static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
+    let mut process = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK) }, app_main);
+    process.exec();
 
     info!("kernel");
 
@@ -174,7 +119,6 @@ const _RETURN_TO_THREAD_PSP: u32 = 0xFFFFFFFD; // Return to Thread Mode. Excepti
 
 #[exception]
 fn SVCall() {
-    // info!("SVCall: lr={:x}", cortex_m::register::lr::read());
     unsafe {
         asm!(
             "pop {{r6, r7}}", // Adjust SP from function prelude "push {r7, lr};add r7, sp, #0x0"

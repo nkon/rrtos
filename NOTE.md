@@ -117,12 +117,16 @@ fn SysTick() {
 
 `core::mem::MaybeUninit`を使って未初期化領域を割り当てる。`cortex-m-rt`が提供するリンカファイル(link.x)では`ALIGN(4)`となっている。しかし、スタックフレームは8バイトアラインにする必要があるので、構造体(`AlignedStack`)を被せて`#[repr(align(8))]`の属性を修飾しておく。
 
+セクション`.uninit`はcortex-m-rtが提供する`link.x`で定義されている。
+
+SRAM領域(0x2000_0000..0x2004_0000)の中で、末尾の0x2003_fbc0..0x2004_0000はdefmtが使う。その上の領域に`APP_STACK`が割り当てられる。
+
 ## リセットハンドラ
 
 [cortex-m-rt](https://docs.rust-embedded.org/cortex-m-rt/0.6.1/cortex_m_rt/index.html)を使っている場合、リセットハンドラは'cortex-m-rt'内で定義されている。そのリセットハンドラが呼ぶフックとして`#[pre_reset]`属性を付けた関数を定義しておくと、リセットハンドラが呼ばれたときに実行される。
 
 ```rust
-const STACK_SIZE: usize = 8 * 1024;
+const STACK_SIZE: usize = 1024;
 const NTHREADS: usize = 4;
 
 #[repr(align(8))]
@@ -236,8 +240,10 @@ fn SVCall() {
     + ハンドラに飛んでくる前に、`r0`,`r1`,`r2`,`r3`,`r12`,`lr`,`pc`,`xPSR`を、そのときのスタック上に積む。`exception_frame`と呼ぶ。
     + 通常、`sp`は4バイトアラインだが、`exception_frame`は8バイトアライン。必要に応じて、アライメントが挿入される。
 * `#[excepton]`はcrotex-m-rtでの例外ハンドラサポート。
-    + **ただし、`rustc`が先頭に`push {r7, lr};add r7, sp, #0x0`、末尾に`pop {r7, pc}`が自動で挿入される。`SVCall`の場合、これでスタックポインタがズレるので、最初に補正しておく**。
+    + **ただし、コンパイラによって、先頭に`push {r7, lr};add r7, sp, #0x0`、末尾に`pop {r7, pc}`が自動で挿入される。`SVCall`の場合、これでスタックポインタがズレるので、最初に補正しておく**。
     + 本来ならば、アセンブラで書いてリンクするべき。
+    + [`#[naked]`](https://docs.rs/naked-function/latest/naked_function/attr.naked.html)が使える可能性もあるが、`#[naked]`は純アセンブラ関数であることが必要。`#[exeption]`はRustマクロを利用しているので相反する。
+    + ちなみに、`execute_process`も同様の問題(関数に入るときに`push {r7 lr}`して、出るときに`pop {r7 pc}`する)があるが、途中で`pop pc`して実行の流れを上書きしているので問題とならない。こちらは、引数をとっているので、`#[naked]`にできない。
 * Thread+MSPから呼ばれた場合 `lr`が0xffff_fff9に、Thread+PSPから呼ばれた場合0xffff_fffdになっている。それを判別して、呼び出し元とは違うスタックポインタに戻るというコード。 
 
 参考書「Rustで始める自作組み込みOS入門」はWioTerminalを使っている。MPUはATSAMD51P19、アーキテクチャはCortex-M4F(ARMv7-M)で、Thumb2 ISA(thumbv7em)が使える。
@@ -344,5 +350,21 @@ Breakpoint 3, rrtos::execute_process (sp=0) at src/main.rs:64
 0x2003f71c:       0x10001237      0x02000002      0x2003fbe0      0x02000000
 0x2003f72c:       0xd0000014      0x2003f7a8      0x100005af      0x3f851e6f
 0x2003f73c:       0x00000000      0x00000000      0x00000000      0x10000209
-0x2003f74c:       0x01000000      0x00000000      0x01000000      0x00000000
+0x2003f74c:       0x01000000      0x00000000      0x01000000   
 ```
+
+
+# links
+
+* [Procedure Call Standard for Arm Architecture (AAPCS)](https://developer.arm.com/documentation/107656/0101/Getting-started-with-Armv8-M-based-systems/Procedure-Call-Standard-for-Arm-Architecture--AAPCS-)
+* [ARM®v6-M Architecture Reference Manual](https://developer.arm.com/documentation/ddi0419/latest/)
+* [Cortex-M0+ Technical Reference Manual](https://developer.arm.com/documentation/ddi0484/latest/)
+* [ARM® Cortex®-M mbed™ SDK and HDK deep-dive](https://os.mbed.com/media/uploads/MACRUM/cortex-m_mbed_deep-dive_20140704a.pdf)
+* [ARM Cortex-M RTOS Context Switching](https://interrupt.memfault.com/blog/cortex-m-rtos-context-switching)
+* [FreeRTOS(Cortex-M)のコンテキストスイッチ周りを調べてみた](https://zenn.dev/lowlvengineer/articles/f87393345bb506)
+* [rp2040のPendSVでコンテキストスイッチをしよう](https://qiita.com/DanfuncL/items/b8b5a8bd03973880acfd)
+* [ARM関連(cortex-Mシリーズ)のCPUメモ](https://qiita.com/tom_S/items/52e4afdb379dff2cf18a)
+* [ARM Cortex-M 32ビットマイコンでベアメタル "Safe" Rust](https://qiita.com/tatsuya6502/items/7d8aaf3792bdb5b66f93)
+
+
+
