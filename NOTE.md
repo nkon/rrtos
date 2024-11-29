@@ -262,6 +262,7 @@ ARMの呼び出し規約(AAPCS)では、r0とr1は返り値、r0-r3は引数、r
 
 * `cortex-m-rt`の`#[exception]`を使うと、関数プロローグで`push {r7, lr}`, `add r7, sp, #0x0`される。これを補正するのに、先頭で`pop {r7}`(`r7`の復元) `pop {r2}`(pushされた`lr`をダミーpop)する。
 * 即値ロードするためのレジスタは `r3`を使う。
+    + 壊して良いのは`r0-r3`,`r12`。`r12`はスクラッチレジスタとして使われる。しかし、`push`/`pop`できるのは`r0-r7`+`lr`。
 
 
 ## execute_process
@@ -273,6 +274,64 @@ ARMの呼び出し規約(AAPCS)では、r0とr1は返り値、r0-r3は引数、r
 * `r1`を`pop`して、`stmia`を使って`r4-r7`をバッファに保存する。
 * 関数エピローグで`r7,pc`がpopされるので、`r4-r6`だけ自力で`pop`する。
 * アプリケーション実行時に`psp`が変わっているので、値を返して、呼び出し側のアプリケーションスタックに保存しておく。
+
+
+# ARM Thumb V6(Cortex-M0+) ABI
+
+[Cortex-M0+ Technical Reference Manual](https://developer.arm.com/documentation/ddi0484/c)
+
+メモリマップ(Cortex-M共通)
+* 0x0000_0000..: コードメモリ
+    + 0x0000_0000..: 内蔵ROM(ブート用)
+    + 0x1000_0000..: 内蔵Flash(ユーザ用: RP2040の場合)
+        - 0x1000_0000..0x1000_01c0: .boot2(RP2040の場合)
+        - 0x1000_01c0..0x1000_0200: 割り込みベクタ(RP2040の場合)
+        - 0x1000_0200..: ユーザコード(RP2040の場合)
+* 0x2000_0000..: 内蔵RAM
+* 0x4000_0000..: オンチップ・ペリフェラル
+* 0x6000_0000..: 外部RAM
+* 0xA000_0000..: 外部デバイス
+* 0xE000_0000..: システムコンポーネント
+  
+[レジスタ](https://developer.arm.com/documentation/ddi0484/c/Programmers-Model/Processor-core-registers-summary)は`r0-r7`,`r8-r11`,`r12`,`r13(sp)`,`r14(lr)`,`r15(pc)`がある。さらに`PSR`、`PRIMASK`,`CONTROL`がある。
+
+* Cortex-M0+では`r8-11`は使えない命令が多い。**今回はとりあえず無視する**
+        - レジスタを指定するビット幅が3ビットのものがほとんど。4ビットのものもある。 
+
+関数呼び出しのとき、引数が4つまでなら`r0-r3`を使ってわたす。それ以上ならスタックに積んでわたす。
+
+* 関数の引数は4つまで(`self`を含む)が高速化につながる。
+* 関数呼び出し=`r0-r3`にパラメータをセットして`bl`命令。`bl`命令は32ビット命令で、飛び先は`pc`相対で*/-4MB(+0x3f_ffff..-0x3f_ffff):`bl`命令の場合、または*/-16MB(+0xff_ffff..-0xff_ffff):`bl.w`命令の場合。遠すぎる場合は`blx <Rd>`命令が使われる。
+    + 飛び先の関数は2byteアライメント。末尾のビットが`1`なら、Little Endianで飛び先の関数を実行する(ほとんどすべてコレ) 
++ `br`命令は、呼び出し時にリターンアドレスを`lr`にセットする。
+    + Rustのコンパイラは先頭で`lr`を`push`し(プロローグ)、最後に`pop pc`する(エピローグ)ことによって、関数終了時に呼ばれたときの`lr`にジャンプする(`pc`にその値がセットされる)。  
+* 戻り値は`r0`,`r1`を使って返す。
+* 呼ばれた側では`r4-r7`,`r8-r11`は壊してはならない。
+    + 必要に応じて`push`しておく。
+* Rustのコンパイラは、
+    + 関数の入口で`push {r7, lr}`,`add r7, sp, #0x0`して(プロローグ)、
+        - 必要に応じて(関数中で使っていれば)、さらにレジスタをスタックに積む
+    + 出口で`pop {r7, pc}`する(エピローグ)。`pc`が書き換わった時点で関数リターン。
+    + その後ろにはオーバーラン用のトラップコードが存在する。
+
+例外が発生したときは`r0-r3`,`r12`,`lr`,`pc`,`xPSR`がスタックに積まれる(exception frame)。Exception Frameは2ワード(8️バイト)アライン。必要に応じてアライメントが調整される。
+* 例外から復帰するときは、復帰先のスタック(`msp`または`psp`)からException frameの内容が`pop`される。
+ 
+動作モード
+
+* 起動時は Thread mode、MSP, Privileged
+* 例外ハンドラ、割り込みハンドラでは Handler mode, MSP, Privileged
+* OS(を使うとき)は Thread mode, MSP, Privileged
+* アプリケーションは Thread mode, PSP, Unprivileged
+* アプリケーションモードからカーネルモードに移行するためには
+    + 例外の発生(SysTickハンドラなど)
+    + `svc`命令の実行`SVCall`ハンドラが実行される
+        - `SVCall`ハンドラは短時間で処理を終え、残りは低優先度の`PendSV`ハンドラが行う
+* ハンドラモードからリターンするとき、次のアドレスにリターン(`bx`)すると処理が分岐する(`EXC_RETURN`)。同様に例外ハンドラが呼ばれたときの`lr`は呼び出し元のコンテキストが入る
+    + `0xFFFFFFF1`: Return to Handler Mode. Exception return gets state from the Main stack. On return execution uses the Main Stack.
+    + `0xFFFFFFF9`: Return to Thread Mode. Exception return gets state from the Main stack. On return execution uses the Main Stack.
+    + `0xFFFFFFFD`: Return to Thread Mode. Exception return gets state from the Process stack. On return execution uses the Process Stack.
+
 
 
 # gdb memo
@@ -386,6 +445,7 @@ Breakpoint 3, rrtos::execute_process (sp=0) at src/main.rs:64
 * [rp2040のPendSVでコンテキストスイッチをしよう](https://qiita.com/DanfuncL/items/b8b5a8bd03973880acfd)
 * [ARM関連(cortex-Mシリーズ)のCPUメモ](https://qiita.com/tom_S/items/52e4afdb379dff2cf18a)
 * [ARM Cortex-M 32ビットマイコンでベアメタル "Safe" Rust](https://qiita.com/tatsuya6502/items/7d8aaf3792bdb5b66f93)
-
+* [Rustで始める自作組込みOS入門](http://garasubo.com/embedded-book/) 基本的にこのページ(書籍化もされている)に沿ってやっていくが、ターゲットがRasPi Picoで、コアがCortex-M0+である。本書が使っているCortex-M4とは異なる部分があり、対応が必要。
+* [Cortex-M0+ CPU Core and ARM Instruction Set Architecture](https://wordpress-courses1920.wolfware.ncsu.edu/ece-461-001-sprg-2020/wp-content/uploads/sites/106/2020/01/ARM-ISA-and-Cortex-M0.pdf)
 
 

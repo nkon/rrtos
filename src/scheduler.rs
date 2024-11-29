@@ -21,7 +21,7 @@ impl<'a> Scheduler<'a> {
         self.list.push(current);
     }
 
-    pub fn exec(&mut self, delay: &mut cortex_m::delay::Delay) -> ! {
+    pub fn exec(&mut self) -> ! {
         loop {
             let current = self.list.head_mut();
             if current.is_none() {
@@ -31,7 +31,6 @@ impl<'a> Scheduler<'a> {
                 p.exec();
             }
             self.schedule_next();
-            delay.delay_ms(1000);
         }
     }
 }

@@ -5,8 +5,8 @@
 #![no_main]
 
 use core::{arch::asm, mem::MaybeUninit, ptr::addr_of_mut};
-use cortex_m::peripheral::syst::SystClkSource;
-use cortex_m_rt::{entry, exception};
+use cortex_m::{asm::wfi, peripheral::syst::SystClkSource};
+use cortex_m_rt::entry;
 use defmt::*;
 use defmt_rtt as _;
 use embedded_hal::digital::OutputPin;
@@ -52,6 +52,7 @@ fn app_main2() -> ! {
         i += 2;
     }
 }
+
 fn app_main3() -> ! {
     info!("app_main3()");
     let mut i = 0;
@@ -61,6 +62,18 @@ fn app_main3() -> ! {
             asm!("svc 0");
         }
         i += 3;
+    }
+}
+
+fn app_idle() -> ! {
+    info!("app_idle");
+    loop {
+        info!("app_idle() wfi");
+        wfi();
+        info!("app_idle() wakeup");
+        unsafe {
+            asm!("svc 0");
+        }
     }
 }
 
@@ -86,7 +99,7 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    // let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
     let pins = Pins::new(
         pac.IO_BANK0,
@@ -106,12 +119,16 @@ fn main() -> ! {
     // in series with the LED.
     let mut led_pin = pins.gpio25.into_push_pull_output();
 
-    // let mut syst = core.SYST;
-    // syst.set_clock_source(SystClkSource::Core);
-    // syst.set_reload(clocks.system_clock.freq().to_kHz());
-    // syst.clear_current();
-    // syst.enable_counter();
-    // syst.enable_interrupt();
+    let mut syst = core.SYST;
+    syst.set_clock_source(SystClkSource::Core);
+    // syst.set_reload(clocks.system_clock.freq().to_kHz());    // SysTick = 1ms(1kHz)
+    info!("system clock = {}", clocks.system_clock.freq().to_kHz()); // 125000
+
+    // リロード値の最高は 0xff_ffff。125000 * 100 = 0xbe_bc20
+    syst.set_reload(clocks.system_clock.freq().to_kHz() * 100); // SysTick = 100ms
+    syst.clear_current();
+    syst.enable_counter();
+    syst.enable_interrupt();
 
     let mut sched = Scheduler::new();
 
@@ -133,7 +150,13 @@ fn main() -> ! {
     let mut item3 = ListItem::new(process3);
     sched.push(&mut item3);
 
-    sched.exec(&mut delay);
+    #[link_section = ".uninit.STACKS"]
+    static mut APP_IDLE: AlignedStack = AlignedStack(MaybeUninit::uninit());
+    let process_idle = Process::new(unsafe { &mut *addr_of_mut!(APP_IDLE) }, app_idle);
+    let mut item_idle = ListItem::new(process_idle);
+    sched.push(&mut item_idle);
+
+    sched.exec();
 
     // loop {
     //     // info!("on!");
@@ -143,48 +166,6 @@ fn main() -> ! {
     //     led_pin.set_low().unwrap();
     //     // delay.delay_ms(500);
     // }
-}
-
-// #[exception]
-// fn SysTick() {
-//     static mut COUNT: u32 = 0;
-//     *COUNT += 1;
-//     if *COUNT == 1000 {
-//         info!("SysTick");
-//         *COUNT = 0;
-//     }
-// }
-
-// ARMv6M B1.5.8 Exception return behavior
-const _RETURN_TO_HANDLER_MSP: u32 = 0xFFFFFFF1; // Return to Handler Mode. Exception return gets state from the Main stack. On return execution uses the Main Stack.
-const _RETURN_TO_THREAD_MSP: u32 = 0xFFFFFFF9; // Return to Thread Mode. Exception return gets state from the Main stack. On return execution uses the Main Stack.
-const _RETURN_TO_THREAD_PSP: u32 = 0xFFFFFFFD; // Return to Thread Mode. Exception return gets state from the Process stack. On return execution uses the Process Stack
-
-#[exception]
-fn SVCall() {
-    unsafe {
-        asm!(
-            "pop {{r7}}", // Adjust SP from function prelude "push {r7, lr};add r7, sp, #0x0"
-            "pop {{r2}}", // dummy pop for lr
-            "ldr r3, =0xfffffff9", //If lr(link register) == 0xfffffff9 -> called from kernel
-            "cmp lr, r3",
-            "bne 1f",
-            "movs r0, #0x3",
-            "msr CONTROL, r0",     //CONTROL.nPRIV <= 1; set unprivileged
-            "isb",                 // Instruction Synchronization Barrier
-            "ldr r3, =0xfffffffd", // Return to Thread+PSP
-            "mov lr, r3",
-            "bx lr",
-            "1:",
-            "movs r0, #0",
-            "msr CONTROL, r0", //CONTROL.nPRIV <= 0; set privileged
-            "isb",
-            "ldr r3, =0xfffffff9", // Return to Thread+MSP
-            "mov lr, r3",
-            "bx lr",
-            options(noreturn),
-        );
-    };
 }
 
 // End of file
