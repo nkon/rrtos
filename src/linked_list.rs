@@ -1,3 +1,4 @@
+#![cfg_attr(test, no_std)]
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
@@ -14,7 +15,7 @@ pub struct LinkedList<'a, T> {
     marker: PhantomData<&'a T>,
 }
 
-impl<'a, T> ListItem<'a, T> {
+impl<T> ListItem<'_, T> {
     pub fn new(value: T) -> Self {
         ListItem {
             value,
@@ -24,20 +25,21 @@ impl<'a, T> ListItem<'a, T> {
     }
 }
 
-impl<'a, T> Deref for ListItem<'a, T> {
+impl<T> Deref for ListItem<'_, T> {
     type Target = T;
+
     fn deref(&self) -> &Self::Target {
         &self.value
     }
 }
 
-impl<'a, T> DerefMut for ListItem<'a, T> {
+impl<T> DerefMut for ListItem<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
     }
 }
 
-impl<'a, T> Default for LinkedList<'a, T> {
+impl<T> Default for LinkedList<'_, T> {
     fn default() -> Self {
         Self::new()
     }
@@ -55,10 +57,10 @@ impl<'a, T> LinkedList<'a, T> {
     pub fn push(&mut self, item: &'a mut ListItem<'a, T>) {
         let ptr = unsafe { NonNull::new_unchecked(item as *mut ListItem<T>) };
         let prev_last = self.last.replace(ptr);
-        if self.last.is_none() {
-            self.head = Some(item.into());
+        if prev_last.is_none() {
+            self.head = Some(ptr);
         } else if let Some(mut i) = prev_last {
-            unsafe { i.as_mut().next = Some(ptr) }
+            unsafe { i.as_mut().next = Some(ptr) };
         }
     }
 
@@ -95,6 +97,8 @@ mod test {
         let mut list = LinkedList::new();
 
         list.push(&mut item1);
+        assert_eq!(Some(&mut 1), list.head_mut());
+
         list.push(&mut item2);
         list.push(&mut item3);
 

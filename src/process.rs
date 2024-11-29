@@ -6,7 +6,7 @@ use cortex_m_rt::ExceptionFrame;
 
 pub struct Process<'a> {
     sp: usize,
-    regs: [u32; 8], // r4, r5, r6, r7
+    regs: [u32; 8], // r4, r5, r6, r7, r8, r9, r10, r11
     marker: PhantomData<&'a u8>,
 }
 

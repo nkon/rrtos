@@ -18,7 +18,11 @@ use rp2040_hal::{
     sio::Sio,
     watchdog::Watchdog,
 };
-use rrtos::process::{AlignedStack, Process};
+use rrtos::{
+    linked_list::ListItem,
+    process::{AlignedStack, Process},
+    scheduler::Scheduler,
+};
 
 #[link_section = ".boot2"]
 #[used]
@@ -82,7 +86,7 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    // let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
     let pins = Pins::new(
         pac.IO_BANK0,
@@ -102,60 +106,54 @@ fn main() -> ! {
     // in series with the LED.
     let mut led_pin = pins.gpio25.into_push_pull_output();
 
-    let mut syst = core.SYST;
-    syst.set_clock_source(SystClkSource::Core);
-    syst.set_reload(clocks.system_clock.freq().to_kHz());
-    syst.clear_current();
-    syst.enable_counter();
-    syst.enable_interrupt();
+    // let mut syst = core.SYST;
+    // syst.set_clock_source(SystClkSource::Core);
+    // syst.set_reload(clocks.system_clock.freq().to_kHz());
+    // syst.clear_current();
+    // syst.enable_counter();
+    // syst.enable_interrupt();
+
+    let mut sched = Scheduler::new();
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
-    let mut process = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK) }, app_main);
+    let process = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK) }, app_main);
+    let mut item = ListItem::new(process);
+    sched.push(&mut item);
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK2: AlignedStack = AlignedStack(MaybeUninit::uninit());
-    let mut process2 = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK2) }, app_main2);
+    let process2 = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK2) }, app_main2);
+    let mut item2 = ListItem::new(process2);
+    sched.push(&mut item2);
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK3: AlignedStack = AlignedStack(MaybeUninit::uninit());
-    let mut process3 = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK3) }, app_main3);
+    let process3 = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK3) }, app_main3);
+    let mut item3 = ListItem::new(process3);
+    sched.push(&mut item3);
 
-    process.exec();
-    info!("kernel");
-    process.exec();
-    info!("kernel2");
-    process.exec();
-    info!("kernel3");
-    process.exec();
-    info!("kernel4");
-    process2.exec();
-    info!("kernel5");
-    process3.exec();
-    info!("kernel6");
-    process.exec();
-    info!("kernel7");
-    process2.exec();
+    sched.exec(&mut delay);
 
-    loop {
-        // info!("on!");
-        led_pin.set_high().unwrap();
-        // delay.delay_ms(500);
-        // info!("off!");
-        led_pin.set_low().unwrap();
-        // delay.delay_ms(500);
-    }
+    // loop {
+    //     // info!("on!");
+    //     led_pin.set_high().unwrap();
+    //     // delay.delay_ms(500);
+    //     // info!("off!");
+    //     led_pin.set_low().unwrap();
+    //     // delay.delay_ms(500);
+    // }
 }
 
-#[exception]
-fn SysTick() {
-    static mut COUNT: u32 = 0;
-    *COUNT += 1;
-    if *COUNT == 1000 {
-        info!("SysTick");
-        *COUNT = 0;
-    }
-}
+// #[exception]
+// fn SysTick() {
+//     static mut COUNT: u32 = 0;
+//     *COUNT += 1;
+//     if *COUNT == 1000 {
+//         info!("SysTick");
+//         *COUNT = 0;
+//     }
+// }
 
 // ARMv6M B1.5.8 Exception return behavior
 const _RETURN_TO_HANDLER_MSP: u32 = 0xFFFFFFF1; // Return to Handler Mode. Exception return gets state from the Main stack. On return execution uses the Main Stack.
