@@ -1,8 +1,8 @@
 use crate::linked_list::{LinkedList, ListItem};
-use crate::process::Process;
+use crate::task::Task;
 
 pub struct Scheduler<'a> {
-    list: LinkedList<'a, Process<'a>>,
+    list: LinkedList<'a, Task<'a>>,
 }
 
 impl<'a> Scheduler<'a> {
@@ -12,7 +12,7 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    pub fn push(&mut self, item: &'a mut ListItem<'a, Process<'a>>) {
+    pub fn push_back(&mut self, item: &'a mut ListItem<'a, Task<'a>>) {
         self.list.push_back(item);
     }
 

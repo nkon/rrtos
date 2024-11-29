@@ -20,8 +20,8 @@ use rp2040_hal::{
 };
 use rrtos::{
     linked_list::ListItem,
-    process::{AlignedStack, Process},
     scheduler::Scheduler,
+    task::{AlignedStack, Task},
 };
 
 #[link_section = ".boot2"]
@@ -134,27 +134,27 @@ fn main() -> ! {
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
-    let process = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK) }, app_main);
-    let mut item = ListItem::new(process);
-    sched.push(&mut item);
+    let task = Task::new(unsafe { &mut *addr_of_mut!(APP_STACK) }, app_main);
+    let mut item = ListItem::new(task);
+    sched.push_back(&mut item);
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK2: AlignedStack = AlignedStack(MaybeUninit::uninit());
-    let process2 = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK2) }, app_main2);
-    let mut item2 = ListItem::new(process2);
-    sched.push(&mut item2);
+    let task2 = Task::new(unsafe { &mut *addr_of_mut!(APP_STACK2) }, app_main2);
+    let mut item2 = ListItem::new(task2);
+    sched.push_back(&mut item2);
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK3: AlignedStack = AlignedStack(MaybeUninit::uninit());
-    let process3 = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK3) }, app_main3);
-    let mut item3 = ListItem::new(process3);
-    sched.push(&mut item3);
+    let task3 = Task::new(unsafe { &mut *addr_of_mut!(APP_STACK3) }, app_main3);
+    let mut item3 = ListItem::new(task3);
+    sched.push_back(&mut item3);
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_IDLE: AlignedStack = AlignedStack(MaybeUninit::uninit());
-    let process_idle = Process::new(unsafe { &mut *addr_of_mut!(APP_IDLE) }, app_idle);
-    let mut item_idle = ListItem::new(process_idle);
-    sched.push(&mut item_idle);
+    let idle_task = Task::new(unsafe { &mut *addr_of_mut!(APP_IDLE) }, app_idle);
+    let mut item_idle = ListItem::new(idle_task);
+    sched.push_back(&mut item_idle);
 
     sched.exec();
 
