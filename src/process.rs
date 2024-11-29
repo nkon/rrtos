@@ -4,9 +4,17 @@ use core::mem::MaybeUninit;
 
 use cortex_m_rt::ExceptionFrame;
 
+enum ProcessState {
+    Running,
+    Ready,
+    Suspended,
+    Blocked,
+}
+
 pub struct Process<'a> {
     sp: usize,
     regs: [u32; 8], // r4, r5, r6, r7, r8, r9, r10, r11
+    state: ProcessState,
     marker: PhantomData<&'a u8>,
 }
 
@@ -16,7 +24,7 @@ pub const STACK_SIZE: usize = 1024;
 pub struct AlignedStack(pub MaybeUninit<[u8; STACK_SIZE]>);
 
 impl<'a> Process<'a> {
-    pub fn new(stack: &'a mut AlignedStack, app_main: fn() -> !) -> Self {
+    pub fn new(stack: &'a mut AlignedStack, app_fn: fn() -> !) -> Self {
         let sp = (stack.0.as_ptr() as usize) + STACK_SIZE - size_of::<ExceptionFrame>();
         let exception_frame: &mut ExceptionFrame = unsafe { &mut *(sp as *mut ExceptionFrame) };
         unsafe {
@@ -26,19 +34,22 @@ impl<'a> Process<'a> {
             exception_frame.set_r3(0);
             exception_frame.set_r12(0);
             exception_frame.set_lr(0);
-            exception_frame.set_pc(app_main as usize as u32);
+            exception_frame.set_pc(app_fn as usize as u32);
             exception_frame.set_xpsr(0x0100_0000); // Set EPSR.T bit
         }
 
         Process {
             sp,
             regs: [0; 8],
+            state: ProcessState::Ready,
             marker: PhantomData,
         }
     }
 
     pub fn exec(&mut self) {
-        self.sp = execute_process(self.sp as u32, &mut self.regs as *mut u32 as u32) as usize;
+        if let ProcessState::Ready = self.state {
+            self.sp = execute_process(self.sp as u32, &mut self.regs as *mut u32 as u32) as usize;
+        }
     }
 }
 

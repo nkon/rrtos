@@ -124,7 +124,7 @@ fn main() -> ! {
     // syst.set_reload(clocks.system_clock.freq().to_kHz());    // SysTick = 1ms(1kHz)
     info!("system clock = {}", clocks.system_clock.freq().to_kHz()); // 125000
 
-    // リロード値の最高は 0xff_ffff。125000 * 100 = 0xbe_bc20
+    // リロード値の最高は 0xff_ffff(24bit)。125000 * 100 = 0xbe_bc20
     syst.set_reload(clocks.system_clock.freq().to_kHz() * 100); // SysTick = 100ms
     syst.clear_current();
     syst.enable_counter();

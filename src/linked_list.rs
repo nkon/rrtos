@@ -54,7 +54,7 @@ impl<'a, T> LinkedList<'a, T> {
         }
     }
 
-    pub fn push(&mut self, item: &'a mut ListItem<'a, T>) {
+    pub fn push_back(&mut self, item: &'a mut ListItem<'a, T>) {
         let ptr = unsafe { NonNull::new_unchecked(item as *mut ListItem<T>) };
         let prev_last = self.last.replace(ptr);
         if prev_last.is_none() {
@@ -68,12 +68,12 @@ impl<'a, T> LinkedList<'a, T> {
         self.head.is_none()
     }
 
-    pub fn head_mut(&mut self) -> Option<&mut T> {
+    pub fn front_mut(&mut self) -> Option<&mut T> {
         self.head
             .map(|ptr| unsafe { &mut *ptr.as_ptr() }.deref_mut())
     }
 
-    pub fn pop(&mut self) -> Option<&'a mut ListItem<'a, T>> {
+    pub fn pop_front(&mut self) -> Option<&'a mut ListItem<'a, T>> {
         let result = self.head.take();
         let next = result.and_then(|mut ptr| unsafe { ptr.as_mut().next });
         if next.is_none() {
@@ -96,18 +96,18 @@ mod test {
         let mut item3 = ListItem::new(3);
         let mut list = LinkedList::new();
 
-        list.push(&mut item1);
-        assert_eq!(Some(&mut 1), list.head_mut());
+        list.push_back(&mut item1);
+        assert_eq!(Some(&mut 1), list.front_mut());
 
-        list.push(&mut item2);
-        list.push(&mut item3);
+        list.push_back(&mut item2);
+        list.push_back(&mut item3);
 
-        assert_eq!(Some(&mut 1), list.head_mut());
-        let result1: &u32 = list.pop().unwrap();
-        assert_eq!(Some(&mut 2), list.head_mut());
-        let result2: &u32 = list.pop().unwrap();
-        assert_eq!(Some(&mut 3), list.head_mut());
-        let result3: &u32 = list.pop().unwrap();
+        assert_eq!(Some(&mut 1), list.front_mut());
+        let result1: &u32 = list.pop_front().unwrap();
+        assert_eq!(Some(&mut 2), list.front_mut());
+        let result2: &u32 = list.pop_front().unwrap();
+        assert_eq!(Some(&mut 3), list.front_mut());
+        let result3: &u32 = list.pop_front().unwrap();
         assert_eq!(1, *result1);
         assert_eq!(2, *result2);
         assert_eq!(3, *result3);
@@ -116,11 +116,11 @@ mod test {
 
         let mut item4 = ListItem::new(4);
         let mut item5 = ListItem::new(5);
-        list.push(&mut item4);
-        list.push(&mut item5);
+        list.push_back(&mut item4);
+        list.push_back(&mut item5);
 
-        let result4: &u32 = list.pop().unwrap();
-        let result5: &u32 = list.pop().unwrap();
+        let result4: &u32 = list.pop_front().unwrap();
+        let result5: &u32 = list.pop_front().unwrap();
         assert_eq!(4, *result4);
         assert_eq!(5, *result5);
 

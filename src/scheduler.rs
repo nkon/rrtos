@@ -13,17 +13,17 @@ impl<'a> Scheduler<'a> {
     }
 
     pub fn push(&mut self, item: &'a mut ListItem<'a, Process<'a>>) {
-        self.list.push(item);
+        self.list.push_back(item);
     }
 
     fn schedule_next(&mut self) {
-        let current = self.list.pop().unwrap();
-        self.list.push(current);
+        let current = self.list.pop_front().unwrap();
+        self.list.push_back(current);
     }
 
     pub fn exec(&mut self) -> ! {
         loop {
-            let current = self.list.head_mut();
+            let current = self.list.front_mut();
             if current.is_none() {
                 unimplemented!();
             }
