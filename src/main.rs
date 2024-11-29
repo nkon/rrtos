@@ -5,7 +5,7 @@
 #![no_main]
 
 use core::{arch::asm, mem::MaybeUninit, ptr::addr_of_mut};
-use cortex_m::{asm::nop, peripheral::syst::SystClkSource};
+use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use defmt::*;
 use defmt_rtt as _;
@@ -27,12 +27,36 @@ pub static BOOT_LOADER: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 fn app_main() -> ! {
     info!("app_main()");
     info!("CONTROL {:02b}", cortex_m::register::control::read().bits());
-    unsafe {
-        asm!("svc 0");
-    }
-    info!("app_main() continue");
+    let mut i = 0;
     loop {
-        nop();
+        info!("app_main(): {}", i);
+        unsafe {
+            asm!("svc 0");
+        }
+        i += 1;
+    }
+}
+
+fn app_main2() -> ! {
+    info!("app_main2()");
+    let mut i = 0;
+    loop {
+        info!("app_main2(): {}", i);
+        unsafe {
+            asm!("svc 0");
+        }
+        i += 2;
+    }
+}
+fn app_main3() -> ! {
+    info!("app_main3()");
+    let mut i = 0;
+    loop {
+        info!("app_main3(): {}", i);
+        unsafe {
+            asm!("svc 0");
+        }
+        i += 3;
     }
 }
 
@@ -88,9 +112,30 @@ fn main() -> ! {
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
     let mut process = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK) }, app_main);
-    process.exec();
 
+    #[link_section = ".uninit.STACKS"]
+    static mut APP_STACK2: AlignedStack = AlignedStack(MaybeUninit::uninit());
+    let mut process2 = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK2) }, app_main2);
+
+    #[link_section = ".uninit.STACKS"]
+    static mut APP_STACK3: AlignedStack = AlignedStack(MaybeUninit::uninit());
+    let mut process3 = Process::new(unsafe { &mut *addr_of_mut!(APP_STACK3) }, app_main3);
+
+    process.exec();
     info!("kernel");
+    process.exec();
+    info!("kernel2");
+    process.exec();
+    info!("kernel3");
+    process.exec();
+    info!("kernel4");
+    process2.exec();
+    info!("kernel5");
+    process3.exec();
+    info!("kernel6");
+    process.exec();
+    info!("kernel7");
+    process2.exec();
 
     loop {
         // info!("on!");
@@ -121,22 +166,23 @@ const _RETURN_TO_THREAD_PSP: u32 = 0xFFFFFFFD; // Return to Thread Mode. Excepti
 fn SVCall() {
     unsafe {
         asm!(
-            "pop {{r6, r7}}", // Adjust SP from function prelude "push {r7, lr};add r7, sp, #0x0"
-            "ldr r4, =0xfffffff9", //If lr(link register) == 0xfffffff9 -> called from kernel
-            "cmp lr, r4",
+            "pop {{r7}}", // Adjust SP from function prelude "push {r7, lr};add r7, sp, #0x0"
+            "pop {{r2}}", // dummy pop for lr
+            "ldr r3, =0xfffffff9", //If lr(link register) == 0xfffffff9 -> called from kernel
+            "cmp lr, r3",
             "bne 1f",
             "movs r0, #0x3",
             "msr CONTROL, r0",     //CONTROL.nPRIV <= 1; set unprivileged
             "isb",                 // Instruction Synchronization Barrier
-            "ldr r4, =0xfffffffd", // Return to Thread+PSP
-            "mov lr, r4",
+            "ldr r3, =0xfffffffd", // Return to Thread+PSP
+            "mov lr, r3",
             "bx lr",
             "1:",
             "movs r0, #0",
             "msr CONTROL, r0", //CONTROL.nPRIV <= 0; set privileged
             "isb",
-            "ldr r4, =0xfffffff9", // Return to Thread+MSP
-            "mov lr, r4",
+            "ldr r3, =0xfffffff9", // Return to Thread+MSP
+            "mov lr, r3",
             "bx lr",
             options(noreturn),
         );

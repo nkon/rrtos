@@ -6,15 +6,14 @@ use cortex_m_rt::ExceptionFrame;
 
 pub struct Process<'a> {
     sp: usize,
-    regs: [u32; 8],
+    regs: [u32; 8], // r4, r5, r6, r7
     marker: PhantomData<&'a u8>,
 }
 
 pub const STACK_SIZE: usize = 1024;
-const NTHREADS: usize = 1;
 
 #[repr(align(8))]
-pub struct AlignedStack(pub MaybeUninit<[[u8; STACK_SIZE]; NTHREADS]>);
+pub struct AlignedStack(pub MaybeUninit<[u8; STACK_SIZE]>);
 
 impl<'a> Process<'a> {
     pub fn new(stack: &'a mut AlignedStack, app_main: fn() -> !) -> Self {
@@ -39,19 +38,25 @@ impl<'a> Process<'a> {
     }
 
     pub fn exec(&mut self) {
-        execute_process(self.sp as u32);
+        self.sp = execute_process(self.sp as u32, &mut self.regs as *mut u32 as u32) as usize;
     }
 }
 
 #[inline(never)]
-fn execute_process(sp: u32) {
+fn execute_process(mut sp: u32, regs: u32) -> u32 {
     unsafe {
         asm!(
-            "push {{r4, r5, r6, r7, lr}}",
+            "push {{r4, r5, r6}}",       // r7, lr are pushed by prorogue
+            "push {{ {regs} }}",         // save r1
+            "ldmia {regs}!, {{r4-r7}}",  // load r4-r7 from backup
             "msr psp, {sp}",
             "svc 0",
-            "pop {{r4, r5, r6, r7, pc}}",
-            sp = in(reg) sp,
+            "pop {{ {regs} }}",
+            "stmia {regs}!, {{r4-r7}}",  // save r4-r7 to backup
+            "mrs {sp}, psp",
+            "pop {{r4, r5, r6}}",        // r7, pc are popped by prorogue
+            sp = inout(reg) sp, regs = in(reg) regs,
         );
     };
+    sp
 }
