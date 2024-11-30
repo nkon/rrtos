@@ -33,6 +33,10 @@ impl<'a> Scheduler<'a> {
             self.schedule_next();
         }
     }
+
+    pub fn current_task(&mut self) -> Option<&mut Task<'a>> {
+        self.list.front_mut()
+    }
 }
 
 impl Default for Scheduler<'_> {

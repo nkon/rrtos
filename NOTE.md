@@ -333,6 +333,27 @@ ARMの呼び出し規約(AAPCS)では、r0とr1は返り値、r0-r3は引数、r
     + `0xFFFFFFFD`: Return to Thread Mode. Exception return gets state from the Process stack. On return execution uses the Process Stack.
 
 
+# `#![cfg_attr(test, no_std)]`
+
+`#![cfg_attr(A, B)]`で、もし`A`なら`B`をセットする、という意味。
+
+linked_list.rsのユニットテストは次のように実行する。
+
+```
+❯ rustc --test src/linked_list.rs
+```
+こうすると、ネイティブの linked_list という実行ファイルができる
+
+```
+❯ ./linked_list 
+
+running 1 test
+test test::test_list ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+
 
 # gdb memo
 

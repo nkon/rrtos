@@ -1,3 +1,4 @@
+use crate::sysdata::{systick_count_get, systick_count_incr};
 use core::arch::asm;
 use cortex_m::peripheral::SCB;
 use cortex_m_rt::exception;
@@ -5,13 +6,9 @@ use defmt::info;
 
 #[exception]
 fn SysTick() {
-    static mut COUNT: u32 = 0;
-    *COUNT += 1;
-    if *COUNT == 1 {
-        info!("SysTick");
-        SCB::set_pendsv();
-        *COUNT = 0;
-    }
+    info!("SysTick:{}", systick_count_get());
+    systick_count_incr();
+    SCB::set_pendsv();
 }
 
 #[exception]
