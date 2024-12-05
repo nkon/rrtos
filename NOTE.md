@@ -333,6 +333,167 @@ ARMの呼び出し規約(AAPCS)では、r0とr1は返り値、r0-r3は引数、r
     + `0xFFFFFFFD`: Return to Thread Mode. Exception return gets state from the Process stack. On return execution uses the Process Stack.
 
 
+# Mutexの実装
+
+割り込みなどがあると、どうしてもグローバル変数が必要になる。
+Rustではグローバル変数へのアクセスは、マルチスレッド環境で競合状態を生むため、厳しく制限されている。
+
+競合状態を回避するためには、手動でロックを実装しなければならない。
+代表的にはMutexを使う。
+
+* `no_std`環境では`spin`クレートを使うことが一般的。
+    + `spin`はスピンロック(ロックを取ろうとして、取れないときは無限ループで取れるまで待つ)を提供する。スピンロックの実装に`AtomicBool::compare_exchange()`を用いており、Cortex-M3(ARMv7-M:thumbv7m)では`LDREX`,`STREX`命令を使って実装されている。しかしCortex-M0+(ARMv6-M:thumbv6m)ではその命令がないので、コンパイルエラーとなる。
+    + `lazy_static`クレートも内部で`spin`を使っているので、Cortex-M0+では同様に使えない。
+* `cortex-m`クレートが独自に`cortex_m::interrupt::Mutex`を提供しているが、実装には「割り込み禁止」を使っている。Cortex-Mの場合は割り込み禁止はコアごとに設定されるので、これはシングルコアでないと正しく動作しない。RP2040はマルチコアなので`cortex_m::interrupt::Mutex`は使えない。
+* RP2040はハードウエアのスピンロックをサポートしている。`rp2040::sio::SpinLock`だ。ハードウエアとして32個の1ビットレジスタがあり、core0からもcore1からもロックとして動作する。`struct`としては、`rp2040::sio::SpinLock0`..=`rp2040::sio::SpinLock31`まで、個別に提供されている。次の4つのメソッドが生えている。`&self`を引数に取るわけではなく、それぞれのSpinLockレジスタ(構造体)のクラスメソッドである。
+    + `pub fn try_claim() -> Option<Self>`Try to claim the spinlock. Will return Some(Self) if the lock is obtained, and None if the lock is already in use somewhere else.
+    + `pub fn claim() -> Self`Claim the spinlock, will block the current thread until the lock is available.Note that calling this multiple times in a row will cause a deadlock
+    + `pub fn claim_async() -> Result<Self, Infallible>`Try to claim the spinlock. Will return WouldBlock until the spinlock is available.
+    + `pub unsafe fn release()`Clear a locked spin-lock. Safety: Only call this function if you hold the spin-lock.
+    + `critical-section`の実装に`SpinLock31`が使われているので他では使えない。
+* `rp2040_hal`クレートでは`features="critical-section-impl"`を有効にした場合、`SpinLock31`がライブラリ内部で`critical_section`の制御に使われる。
+    + `critical_section_impl`モジュールは`pub`ではないので、`rp2040_hal`の外では使えない。
+
+Rust+ベアメタル+RTOSの分野ではCortex-M3での例題が多く公開されているが、RP2040では、かなり差異が大きくなる。
+
+今回は自前で、`rp2040::sio::SpinLock0`を使ってMutexを実装する。
+
+RustのMutexは、Mutex変数をlockするのではなく、ジェネリック型として実装される。
+
+* C言語などのようにロック変数(Mutex変数)を使う場合は、ロック変数をロックしてから、ロック変数をアンロックするまでがクリティカル区間となり、同じロック変数を共用している限り、他のスレッドはクリティカル区間に入ってこない。
+* Rustの場合は、データにロックが付く。データをロックしてから、データをアンロックするで、他のスレッドでそのデータをロックできないので、データが保護される。通常、アンロックは`Drop`トレイトによって実施される。スコープを外れたときに、自動的に`Drop`トレイトによって自動でアンロックされる。
+    + ロック変数とデータが一体化されているので、データにアクセスするときにロックをし忘れることがない。
+
+```rust
+pub struct Mutex<T> {
+    locked: AtomicBool,
+    data: UnsafeCell<T>,
+}
+```
+
+これに、`new()`, `lock()`, `unlock()`が実装される。
+
+* `new()`は引数を`UnsafeCell<T>`に格納する。
+* `lock()`は内部のロックを取り、`MutexGuard<'_, T>`型を返す。
+* `unlock()`は内部のロックを返す。
+* 内部のロック変数(`locked`)は`AtmicBool`型だがアトミック操作(`compare_exchange()`)を用いていないので、`rp2040::sio::SpinLock`でガードする。
+* ロック変数は複数スレッドからアクセスされる可能性があるので`Ordering`を指示する。これはメモリバリア命令などにコンパイルされ、それらはCortex-M0+にも存在する。
+
+```rust
+pub struct Mutex<T> {
+    locked: AtomicBool,
+    data: UnsafeCell<T>,
+}
+
+impl<T> Mutex<T> {
+    pub const fn new(value: T) -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+            data: UnsafeCell::new(value),
+        }
+    }
+    pub fn lock(&self) -> MutexGuard<'_, T> {
+        while self.locked.load(atomic::Ordering::Acquire) {
+            // 他のスレッドがlockedを開放するまで待つ
+            core::hint::spin_loop()
+        }
+        let _lock = Spinlock0::claim();
+        self.locked.store(true, atomic::Ordering::Release);
+        MutexGuard::new(self)
+        // SpinLock0自体はここでドロップ=>releaseされる
+    }
+    fn unlock(&self) {
+        if !self.locked.load(atomic::Ordering::Acquire) {
+            return;
+        }
+        let _lock = Spinlock0::claim();
+        self.locked.store(false, atomic::Ordering::Release);
+    }
+}
+```
+
+`lock()`が`MutexGuard`型を返すのがポイント。`MutexGuard`型の変数が有効ならばロックも有効、ということ。ユーザが直接`MutexGuard`を操作することは無いので、メソッドはすべてプライベート(`pub`ではない)。
+
+`MutexGuard<'a, T>`という型をつくる。
+
+```rust
+pub struct MutexGuard<'a, T> {
+    lock: &'a Mutex<T>,
+}
+```
+
+参照(`Deref`、`DerefMut`)のトレイとを実装し、中身に透過的にアクセスできるようにする。
+
+```rust
+impl<'a, T> MutexGuard<'a, T> {
+    fn new(lock: &'a Mutex<T>) -> Self {
+        MutexGuard { lock }
+    }
+}
+
+impl<T> Deref for MutexGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { &mut *self.lock.data.get() }
+    }
+}
+
+impl<T> DerefMut for MutexGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.lock.data.get() }
+    }
+}
+```
+そして、`Drop`のトレイトを実装し、スコープを外れたら`unlock()`するようにする。
+
+```rust
+impl<T> Drop for MutexGuard<'_, T> {
+    fn drop(&mut self) {
+        self.lock.unlock();
+    }
+}
+```
+
+最後に、`Mutex`,`MutexGuard`に`Sync`を実装して、複数スレッドからのアクセスを許可する。これは、プログラマがロックを使って責任をもって管理するから共有アクセスを可能にしてください、というコンパイラへのお願い。なので`unsafe`となる。
+
+* 別のスレッドに送ることができる=`Send`
+* 別のスレッドと共有できる=`Sync`
+
+```rust
+unsafe impl<T> Sync for Mutex<T> {}
+unsafe impl<T> Sync for MutexGuard<'_, T> {}
+```
+
+こうやって作った`Mutex`を使えば、グローバルデータに安全(`unsafe`を使わずに)にアクセスできる。
+
+```rust
+struct Count(u32);
+
+impl Count {
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+    pub fn incr(&mut self) {
+        self.0 = self.0.wrapping_add(1);
+    }
+}
+
+// Mutex::new, Count::new が const fn なので、static変数を初期化できる
+static SYSTICK_COUNT: Mutex<Count> = Mutex::new(Count::new(0));
+
+pub fn systick_count_incr() {
+    // lockを取って、UnsafeCell<>の中の値を操作する(mutでなくてもOK:内部可変性)
+    SYSTICK_COUNT.lock().incr();
+}
+
+pub fn systick_count_get() -> u32 {
+    SYSTICK_COUNT.lock().0
+}
+```
+
+
+
+
 # `#![cfg_attr(test, no_std)]`
 
 `#![cfg_attr(A, B)]`で、もし`A`なら`B`をセットする、という意味。

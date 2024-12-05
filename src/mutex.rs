@@ -1,11 +1,7 @@
 use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicBool, Ordering};
-
-pub struct Mutex<T> {
-    locked: AtomicBool,
-    data: UnsafeCell<T>,
-}
+use core::sync::atomic::{self, AtomicBool};
+use rp2040_hal::sio::Spinlock0;
 
 pub struct MutexGuard<'a, T> {
     lock: &'a Mutex<T>,
@@ -36,6 +32,11 @@ impl<T> Drop for MutexGuard<'_, T> {
     }
 }
 
+pub struct Mutex<T> {
+    locked: AtomicBool,
+    data: UnsafeCell<T>,
+}
+
 impl<T> Mutex<T> {
     pub const fn new(value: T) -> Self {
         Self {
@@ -44,13 +45,23 @@ impl<T> Mutex<T> {
         }
     }
     pub fn lock(&self) -> MutexGuard<'_, T> {
-        // Cortex-M0+ does not support AtmicBool::compare_exchange()
-        // Do nothing now
+        while self.locked.load(atomic::Ordering::Acquire) {
+            // 他のスレッドがlockedを開放するまで待つ
+            core::hint::spin_loop()
+        }
+        let _lock = Spinlock0::claim();
+        self.locked.store(true, atomic::Ordering::Release);
         MutexGuard::new(self)
+        // SpinLock0自体はここでドロップ=>releaseされる
     }
     fn unlock(&self) {
-        self.locked.store(false, Ordering::Release);
+        if !self.locked.load(atomic::Ordering::Acquire) {
+            return;
+        }
+        let _lock = Spinlock0::claim();
+        self.locked.store(false, atomic::Ordering::Release);
     }
 }
 
 unsafe impl<T> Sync for Mutex<T> {}
+unsafe impl<T> Sync for MutexGuard<'_, T> {}
