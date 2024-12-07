@@ -83,25 +83,6 @@ impl<'a, T> LinkedList<'a, T> {
         self.head = next;
         result.map(|ptr| unsafe { &mut *ptr.as_ptr() })
     }
-
-    pub fn rotate(&mut self) {
-        // let current = self.list.pop_front().unwrap();
-        // self.list.push_back(current);
-        let result = self.head.take();
-        let next = result.and_then(|mut ptr| unsafe { ptr.as_mut().next });
-        if next.is_none() {
-            self.last = None;
-        }
-        self.head = next;
-        result.map(|ptr| unsafe { &mut *ptr.as_ptr() });
-        let ptr = result.unwrap();
-        let prev_last = self.last.replace(ptr);
-        if prev_last.is_none() {
-            self.head = Some(ptr);
-        } else if let Some(mut i) = prev_last {
-            unsafe { i.as_mut().next = Some(ptr) };
-        }
-    }
 }
 
 #[cfg(test)]

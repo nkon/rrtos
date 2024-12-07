@@ -19,7 +19,6 @@ impl<'a> Scheduler<'a> {
     fn schedule_next(&mut self) {
         let current = self.list.pop_front().unwrap();
         self.list.push_back(current);
-        // self.list.rotate();
     }
 
     pub fn exec(&mut self) -> ! {

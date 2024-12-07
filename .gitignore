@@ -6,6 +6,9 @@ target/
 downloads/
 
 asm.S
+gdbinit
+linked_list
+src/asm_support.s
 
 # editor files
 .vscode/*

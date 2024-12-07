@@ -491,8 +491,52 @@ pub fn systick_count_get() -> u32 {
 }
 ```
 
+# alloc::boxed::Box, Box::leak(), GlobalAlloc
 
+値をスタック上に割り当てるのではなくヒープ上に割り当てる場合、通常の`std`環境では`Box`を使う。`no_std`の`core`クレートでは提供されていないが、`no_std`環境でも、メモリアロケータを実装することで`alloc`クレートが使え、`Box`や`Vec`などが使える。
 
+他の手段として`heapless`クレートもあるが、アトミック命令に依存しているのでCortex-M0+では使えない。
+
+簡単にやるには、ヒープ領域を固定で割り当て、BumpPointerAllocatorという、使用済み領域を示すポインタが進むだけで、開放してもメモリが戻らないタイプのアロケータを実装する。
+
+[https://tomoyuki-nakabayashi.github.io/embedded-rust-techniques/03-bare-metal/allocator.html]
+
+こちらの例題のメモリアロケータはバグがあるので、本家のものを参照するのが良い。
+
+[https://docs.rust-embedded.org/book/collections/]
+
+この実装は簡易なもので、マルチコア環境でのデータ競合を想定していないので、実際に使うにはMutexなどで保護する必要がある。
+
+`GlobalAlloc`を定義して`alloc::boxed::Box`を使えば、データをヒープ上に割り当てることができる。
+
+ただし、そのヒープ上のデータはグローバル(`'static`ライフタイム)変数からは参照できない。なぜかというと、ヒープ上のデータは`'static`よりもライフタイムが短いから。`Box::leak()`を使えば、メモリリークを承知の上で、ヒープ上のデータを`'static'`な変数に参照させることができる。
+
+マニュアルにも書かれているが、`Box::leak()`はメンバ関数ではなく、クラス関数なので次の例のように使う。
+
+[https://doc.rust-lang.org/alloc/boxed/struct.Box.html#method.leak]
+
+```rust
+// グローバルなスケジューラを定義する。複数スレッドからアクセスされるのでMutexで囲う
+static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
+
+//...
+
+// `.uninit`領域に`APP_STACK`を確保する
+    #[link_section = ".uninit.STACKS"]
+    static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
+
+    // ヒープ上に`Task`構造体を割り当てる  
+    let task = Box::new(Task::new(
+        unsafe { &mut *addr_of_mut!(APP_STACK) },
+        app_main,
+    ));
+
+    // リストアイテム構造体をヒープ上に割り当て、leak()で`staticライフタイムを与える
+    let item: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*task)));
+
+    // グローバルなスケジューラにタスク構造体を登録する
+    SCHEDULER.lock().push_back(item);
+```
 
 # `#![cfg_attr(test, no_std)]`
 

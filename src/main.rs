@@ -22,6 +22,7 @@ use rp2040_hal::{
 };
 use rrtos::{
     linked_list::ListItem,
+    mutex::Mutex,
     scheduler::Scheduler,
     task::{AlignedStack, Task},
 };
@@ -79,7 +80,7 @@ fn app_idle() -> ! {
     }
 }
 
-// static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
+static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 
 #[entry]
 fn main() -> ! {
@@ -134,16 +135,14 @@ fn main() -> ! {
     syst.enable_counter();
     syst.enable_interrupt();
 
-    let mut sched = Box::new(Scheduler::new());
-
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
     let task = Box::new(Task::new(
         unsafe { &mut *addr_of_mut!(APP_STACK) },
         app_main,
     ));
-    let mut item = Box::new(ListItem::new(*task));
-    sched.push_back(&mut item);
+    let item: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*task)));
+    SCHEDULER.lock().push_back(item);
     info!("task is added");
 
     #[link_section = ".uninit.STACKS"]
@@ -152,8 +151,8 @@ fn main() -> ! {
         unsafe { &mut *addr_of_mut!(APP_STACK2) },
         app_main2,
     ));
-    let mut item2 = Box::new(ListItem::new(*task2));
-    sched.push_back(&mut item2);
+    let item2: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*task2)));
+    SCHEDULER.lock().push_back(item2);
     info!("task2 is added");
 
     #[link_section = ".uninit.STACKS"]
@@ -162,19 +161,19 @@ fn main() -> ! {
         unsafe { &mut *addr_of_mut!(APP_STACK3) },
         app_main3,
     ));
-    let mut item3 = Box::new(ListItem::new(*task3));
-    sched.push_back(&mut item3);
+    let item3: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*task3)));
+    SCHEDULER.lock().push_back(item3);
     info!("task3 is added");
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_IDLE: AlignedStack = AlignedStack(MaybeUninit::uninit());
     let idle_task = Box::new(Task::new(unsafe { &mut *addr_of_mut!(APP_IDLE) }, app_idle));
-    let mut item_idle = Box::new(ListItem::new(*idle_task));
-    sched.push_back(&mut item_idle);
+    let item_idle: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*idle_task)));
+    SCHEDULER.lock().push_back(item_idle);
     info!("idle_task is added");
 
     // *SCHEDULER.lock() = *sched;
-    sched.exec();
+    SCHEDULER.lock().exec();
 
     // loop {
     //     // info!("on!");
