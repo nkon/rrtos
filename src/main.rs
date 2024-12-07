@@ -4,6 +4,8 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+use alloc::boxed::Box;
 use core::{arch::asm, mem::MaybeUninit, ptr::addr_of_mut};
 use cortex_m::{asm::wfi, peripheral::syst::SystClkSource};
 use cortex_m_rt::entry;
@@ -77,6 +79,8 @@ fn app_idle() -> ! {
     }
 }
 
+// static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
+
 #[entry]
 fn main() -> ! {
     info!("Program start");
@@ -130,32 +134,46 @@ fn main() -> ! {
     syst.enable_counter();
     syst.enable_interrupt();
 
-    let mut sched = Scheduler::new();
+    let mut sched = Box::new(Scheduler::new());
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
-    let task = Task::new(unsafe { &mut *addr_of_mut!(APP_STACK) }, app_main);
-    let mut item = ListItem::new(task);
+    let task = Box::new(Task::new(
+        unsafe { &mut *addr_of_mut!(APP_STACK) },
+        app_main,
+    ));
+    let mut item = Box::new(ListItem::new(*task));
     sched.push_back(&mut item);
+    info!("task is added");
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK2: AlignedStack = AlignedStack(MaybeUninit::uninit());
-    let task2 = Task::new(unsafe { &mut *addr_of_mut!(APP_STACK2) }, app_main2);
-    let mut item2 = ListItem::new(task2);
+    let task2 = Box::new(Task::new(
+        unsafe { &mut *addr_of_mut!(APP_STACK2) },
+        app_main2,
+    ));
+    let mut item2 = Box::new(ListItem::new(*task2));
     sched.push_back(&mut item2);
+    info!("task2 is added");
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK3: AlignedStack = AlignedStack(MaybeUninit::uninit());
-    let task3 = Task::new(unsafe { &mut *addr_of_mut!(APP_STACK3) }, app_main3);
-    let mut item3 = ListItem::new(task3);
+    let task3 = Box::new(Task::new(
+        unsafe { &mut *addr_of_mut!(APP_STACK3) },
+        app_main3,
+    ));
+    let mut item3 = Box::new(ListItem::new(*task3));
     sched.push_back(&mut item3);
+    info!("task3 is added");
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_IDLE: AlignedStack = AlignedStack(MaybeUninit::uninit());
-    let idle_task = Task::new(unsafe { &mut *addr_of_mut!(APP_IDLE) }, app_idle);
-    let mut item_idle = ListItem::new(idle_task);
+    let idle_task = Box::new(Task::new(unsafe { &mut *addr_of_mut!(APP_IDLE) }, app_idle));
+    let mut item_idle = Box::new(ListItem::new(*idle_task));
     sched.push_back(&mut item_idle);
+    info!("idle_task is added");
 
+    // *SCHEDULER.lock() = *sched;
     sched.exec();
 
     // loop {

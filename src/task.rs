@@ -1,7 +1,6 @@
 use core::arch::asm;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
-
 use cortex_m_rt::ExceptionFrame;
 
 enum TaskState {
@@ -48,13 +47,13 @@ impl<'a> Task<'a> {
 
     pub fn exec(&mut self) {
         if let TaskState::Ready = self.state {
-            self.sp = execute_process(self.sp as u32, &mut self.regs as *mut u32 as u32) as usize;
+            self.sp = execute_task(self.sp as u32, &mut self.regs as *mut u32 as u32) as usize;
         }
     }
 }
 
 #[inline(never)]
-fn execute_process(mut sp: u32, regs: u32) -> u32 {
+fn execute_task(mut sp: u32, regs: u32) -> u32 {
     unsafe {
         asm!(
             "push {{r4, r5, r6}}",       // r7, lr are pushed by prorogue
