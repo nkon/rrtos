@@ -20,8 +20,6 @@ impl<'a> Scheduler<'a> {
     }
 
     fn schedule_next(&self) {
-        // let current = self.ready.pop_front().unwrap();
-        // self.ready.push_back(current);
         unsafe { self.ready.lock().get().as_mut().unwrap().rotate() };
     }
 

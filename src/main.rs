@@ -23,6 +23,7 @@ use rp2040_hal::{
 use rrtos::{
     linked_list::ListItem,
     mutex::Mutex,
+    rwlock::RwLock,
     scheduler::Scheduler,
     systick,
     task::{AlignedStack, Task},
@@ -63,7 +64,7 @@ fn app_main3() -> ! {
     loop {
         info!("app_main3(): {}", i);
         SCHEDULER
-            .lock()
+            .write()
             .current_task()
             .unwrap()
             .wait_until(systick::count_get().wrapping_add(5));
@@ -83,7 +84,7 @@ fn app_idle() -> ! {
     }
 }
 
-static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
+static SCHEDULER: RwLock<Scheduler> = RwLock::new(Scheduler::new());
 
 #[entry]
 fn main() -> ! {
@@ -141,7 +142,7 @@ fn main() -> ! {
         app_main,
     ));
     let item: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*task)));
-    SCHEDULER.lock().push_back(item);
+    SCHEDULER.write().push_back(item);
     info!("task is added");
 
     #[link_section = ".uninit.STACKS"]
@@ -151,7 +152,7 @@ fn main() -> ! {
         app_main2,
     ));
     let item2: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*task2)));
-    SCHEDULER.lock().push_back(item2);
+    SCHEDULER.write().push_back(item2);
     info!("task2 is added");
 
     #[link_section = ".uninit.STACKS"]
@@ -161,17 +162,17 @@ fn main() -> ! {
         app_main3,
     ));
     let item3: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*task3)));
-    SCHEDULER.lock().push_back(item3);
+    SCHEDULER.write().push_back(item3);
     info!("task3 is added");
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_IDLE: AlignedStack = AlignedStack(MaybeUninit::uninit());
     let idle_task = Box::new(Task::new(unsafe { &mut *addr_of_mut!(APP_IDLE) }, app_idle));
     let item_idle: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*idle_task)));
-    SCHEDULER.lock().push_back(item_idle);
+    SCHEDULER.write().push_back(item_idle);
     info!("idle_task is added");
 
-    SCHEDULER.lock_weak().exec();
+    SCHEDULER.read().exec();
 
     // loop {
     //     // info!("on!");

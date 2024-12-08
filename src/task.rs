@@ -6,9 +6,7 @@ use cortex_m_rt::ExceptionFrame;
 use defmt::info;
 
 enum TaskState {
-    Running,
     Ready,
-    Suspended,
     Blocked,
 }
 
@@ -52,11 +50,11 @@ impl<'a> Task<'a> {
     pub fn exec(&mut self) {
         match self.state {
             TaskState::Ready => {
-                // info!("execute task {:x}", self.sp);
+                info!("execute task {:x}", self.sp);
                 self.sp = execute_task(self.sp as u32, &mut self.regs as *mut u32 as u32) as usize;
             }
             TaskState::Blocked => {
-                // info!("task is blocked{:x}", self.sp);
+                info!("task is blocked{:x}", self.sp);
                 if let Some(until) = self.wait_until {
                     if systick::count_get() >= until {
                         self.wait_until = None;
@@ -64,11 +62,11 @@ impl<'a> Task<'a> {
                     }
                 }
             }
-            _ => {}
         }
     }
 
     pub fn wait_until(&mut self, tick: u32) {
+        // info!("wait_until({})", tick);
         self.wait_until = Some(tick);
         self.state = TaskState::Blocked;
     }
