@@ -101,7 +101,7 @@ fn SysTick() {
 |             |       |                           |
 | 0xE000_ED08 |       | VTOR                      |
 
-* boot2の中で、VTORが0x1000_0100(=vector_table)を指すように、MSPが`vector_table[0]`\(=RESET_VECTOR\)の中身(=`__stack_start`=0x2003_f7b8)を指すようにセットされて、`.text`の先頭(=0x1000_0100)にジャンプする。詳細は[boot-k]()の解説を参照。
+* boot2の中で、VTORが0x1000_0100(=vector_table)を指すように、MSPが`vector_table[0]`\(=RESET_VECTOR\)の中身(=`__stack_start`=0x2003_f7b8)を指すようにセットされて、`.text`の先頭(=0x1000_0100)にジャンプする。詳細は[boot-k](https://nkon.github.io/RP2040-Boot2/)の解説を参照。
 * フレームワークのリンカファイル(memory.x)が提供している`.uninit`セクションの中に、`APP_STACK`を割り当て、アプリケーション用のスタックとする。アプリケーションを実行するときは、スタックポインタを切り替えて、ここの領域をスタックとして使うようにする。
 
 

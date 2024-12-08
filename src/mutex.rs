@@ -45,14 +45,17 @@ impl<T> Mutex<T> {
         }
     }
     pub fn lock(&self) -> MutexGuard<'_, T> {
+        // Aquire -> Releaseの順序が保証されるようにバリア命令が出力される
+        // バリア命令はCortex-M0+でも有る
         while self.locked.load(atomic::Ordering::Acquire) {
             // 他のスレッドがlockedを開放するまで待つ
             core::hint::spin_loop()
         }
+        // self.lockedの操作をSpinLock0で保護する
         let _lock = Spinlock0::claim();
         self.locked.store(true, atomic::Ordering::Release);
         MutexGuard::new(self)
-        // SpinLock0自体はここでドロップ=>releaseされる
+        // _lockがここでドロップされ、SpinLock0がreleaseされる
     }
     fn unlock(&self) {
         if !self.locked.load(atomic::Ordering::Acquire) {

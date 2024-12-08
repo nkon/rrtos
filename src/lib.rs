@@ -6,4 +6,5 @@ pub mod mutex;
 pub mod scheduler;
 pub mod syscall;
 pub mod sysdata;
+pub mod systick;
 pub mod task;

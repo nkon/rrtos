@@ -22,6 +22,7 @@ unsafe impl GlobalAlloc for BumpPointerAlloc {
         // to use from within interrupts
         // `interrupt::free`は、割り込み内でアロケータを安全に使用するための
         // クリティカルセクションです。
+        // TODO: 割り込み禁止ではなく、rp2040_hal::sio::Spinlock1を使ったロックに変更する
         interrupt::free(|_| {
             let head = self.head.get();
             let size = layout.size();

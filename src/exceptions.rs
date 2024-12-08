@@ -1,15 +1,6 @@
-use crate::sysdata::{systick_count_get, systick_count_incr};
 use core::arch::asm;
 use cortex_m::peripheral::SCB;
 use cortex_m_rt::exception;
-use defmt::info;
-
-#[exception]
-fn SysTick() {
-    info!("SysTick:{}", systick_count_get());
-    systick_count_incr();
-    SCB::set_pendsv();
-}
 
 #[exception]
 fn SVCall() {

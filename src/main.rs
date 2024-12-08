@@ -24,6 +24,7 @@ use rrtos::{
     linked_list::ListItem,
     mutex::Mutex,
     scheduler::Scheduler,
+    systick,
     task::{AlignedStack, Task},
 };
 
@@ -31,6 +32,7 @@ use rrtos::{
 #[used]
 pub static BOOT_LOADER: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
+// TODO: タスクのスリープ機能を実装する。SYSTICKを使ったカウンタ、タスクの休止状態。
 fn app_main() -> ! {
     info!("app_main()");
     info!("CONTROL {:02b}", cortex_m::register::control::read().bits());
@@ -86,7 +88,7 @@ static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 fn main() -> ! {
     info!("Program start");
     let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
+    let mut core = pac::CorePeripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
     let sio = Sio::new(pac.SIO);
 
@@ -124,16 +126,12 @@ fn main() -> ! {
     // in series with the LED.
     let mut led_pin = pins.gpio25.into_push_pull_output();
 
-    let mut syst = core.SYST;
-    syst.set_clock_source(SystClkSource::Core);
-    // syst.set_reload(clocks.system_clock.freq().to_kHz());    // SysTick = 1ms(1kHz)
-    info!("system clock = {}", clocks.system_clock.freq().to_kHz()); // 125000
+    info!("system clock = {}", clocks.system_clock.freq().to_kHz()); // 125000kHz = 125MHz
 
-    // リロード値の最高は 0xff_ffff(24bit)。125000 * 100 = 0xbe_bc20
-    syst.set_reload(clocks.system_clock.freq().to_kHz() * 100); // SysTick = 100ms
-    syst.clear_current();
-    syst.enable_counter();
-    syst.enable_interrupt();
+    // ここで core.SYSTをmoveする(同じくSYSTを使っているcortex_m::delay::Delayは同時には使えない)
+    // リロード値の最高は 0xff_ffff(24bit)。125000 * 100 = 0xbe_bc20が遅い設定
+    // systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz()); // SysTick = 1ms(1kHz)
+    systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz() * 100); // SysTick = 100ms
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
