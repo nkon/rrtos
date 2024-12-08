@@ -505,7 +505,7 @@ pub fn systick_count_get() -> u32 {
 
 [https://docs.rust-embedded.org/book/collections/]
 
-この実装は簡易なもので、マルチコア環境でのデータ競合を想定していないので、実際に使うにはMutexなどで保護する必要がある。
+この実装は簡易なもので、競合防止のために割り込み禁止(`cortex_m::interrupt::free`)を利用しており、マルチコア環境でのデータ競合を想定していないので、実際に使うには別の仕組みで保護する必要がある。
 
 `GlobalAlloc`を定義して`alloc::boxed::Box`を使えば、データをヒープ上に割り当てることができる。
 

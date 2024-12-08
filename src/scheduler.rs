@@ -27,7 +27,8 @@ impl<'a> Scheduler<'a> {
 
     pub fn exec(&self) -> ! {
         loop {
-            match unsafe { self.ready.lock().get().as_mut().unwrap().front_mut() } {
+            let current = unsafe { self.ready.lock().get().as_mut().unwrap().front_mut() };
+            match current {
                 None => {
                     unimplemented!();
                 }
