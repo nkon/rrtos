@@ -69,7 +69,7 @@ impl<'a, T> LinkedList<'a, T> {
         self.head.is_none()
     }
 
-    pub fn front_mut(&mut self) -> Option<&mut T> {
+    pub fn front_mut(&self) -> Option<&mut T> {
         self.head
             .map(|ptr| unsafe { &mut *ptr.as_ptr() }.deref_mut())
     }
@@ -82,6 +82,25 @@ impl<'a, T> LinkedList<'a, T> {
         }
         self.head = next;
         result.map(|ptr| unsafe { &mut *ptr.as_ptr() })
+    }
+
+    pub fn rotate(&mut self) {
+        // let current = self.ready.pop_front().unwrap();
+        // self.ready.push_back(current);
+        let result = self.head.take();
+        let next = result.and_then(|mut ptr| unsafe { ptr.as_mut().next });
+        if next.is_none() {
+            return;
+        }
+        self.head = next;
+        let item = result.map(|ptr| unsafe { &mut *ptr.as_ptr() });
+        let ptr = unsafe { NonNull::new_unchecked(item.unwrap() as *mut ListItem<T>) };
+        let prev_last = self.last.replace(ptr);
+        if prev_last.is_none() {
+            self.head = Some(ptr);
+        } else if let Some(mut i) = prev_last {
+            unsafe { i.as_mut().next = Some(ptr) };
+        }
     }
 }
 

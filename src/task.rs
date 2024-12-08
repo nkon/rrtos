@@ -1,7 +1,9 @@
+use crate::systick;
 use core::arch::asm;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use cortex_m_rt::ExceptionFrame;
+use defmt::info;
 
 enum TaskState {
     Running,
@@ -14,6 +16,7 @@ pub struct Task<'a> {
     sp: usize,
     regs: [u32; 8], // r4, r5, r6, r7, r8, r9, r10, r11
     state: TaskState,
+    wait_until: Option<u32>,
     marker: PhantomData<&'a u8>,
 }
 
@@ -41,14 +44,33 @@ impl<'a> Task<'a> {
             sp,
             regs: [0; 8],
             state: TaskState::Ready,
+            wait_until: None,
             marker: PhantomData,
         }
     }
 
     pub fn exec(&mut self) {
-        if let TaskState::Ready = self.state {
-            self.sp = execute_task(self.sp as u32, &mut self.regs as *mut u32 as u32) as usize;
+        match self.state {
+            TaskState::Ready => {
+                // info!("execute task {:x}", self.sp);
+                self.sp = execute_task(self.sp as u32, &mut self.regs as *mut u32 as u32) as usize;
+            }
+            TaskState::Blocked => {
+                // info!("task is blocked{:x}", self.sp);
+                if let Some(until) = self.wait_until {
+                    if systick::count_get() >= until {
+                        self.wait_until = None;
+                        self.state = TaskState::Ready;
+                    }
+                }
+            }
+            _ => {}
         }
+    }
+
+    pub fn wait_until(&mut self, tick: u32) {
+        self.wait_until = Some(tick);
+        self.state = TaskState::Blocked;
     }
 }
 

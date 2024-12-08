@@ -20,13 +20,38 @@ impl<T> Deref for MutexGuard<'_, T> {
     }
 }
 
-impl<T> DerefMut for MutexGuard<'_, T> {
+// MutexGuardはDerefMutを実装しない
+
+impl<T> Drop for MutexGuard<'_, T> {
+    fn drop(&mut self) {
+        self.lock.unlock();
+    }
+}
+
+pub struct MutexGuardMut<'a, T> {
+    lock: &'a Mutex<T>,
+}
+
+impl<'a, T> MutexGuardMut<'a, T> {
+    fn new(lock: &'a Mutex<T>) -> Self {
+        MutexGuardMut { lock }
+    }
+}
+
+impl<T> Deref for MutexGuardMut<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { &mut *self.lock.data.get() }
+    }
+}
+
+impl<T> DerefMut for MutexGuardMut<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         unsafe { &mut *self.lock.data.get() }
     }
 }
 
-impl<T> Drop for MutexGuard<'_, T> {
+impl<T> Drop for MutexGuardMut<'_, T> {
     fn drop(&mut self) {
         self.lock.unlock();
     }
@@ -44,7 +69,8 @@ impl<T> Mutex<T> {
             data: UnsafeCell::new(value),
         }
     }
-    pub fn lock(&self) -> MutexGuard<'_, T> {
+    // 読み書きロック: 本当にロックする
+    pub fn lock(&self) -> MutexGuardMut<'_, T> {
         // Aquire -> Releaseの順序が保証されるようにバリア命令が出力される
         // バリア命令はCortex-M0+でも有る
         while self.locked.load(atomic::Ordering::Acquire) {
@@ -54,6 +80,13 @@ impl<T> Mutex<T> {
         // self.lockedの操作をSpinLock0で保護する
         let _lock = Spinlock0::claim();
         self.locked.store(true, atomic::Ordering::Release);
+        MutexGuardMut::new(self)
+        // _lockがここでドロップされ、SpinLock0がreleaseされる
+    }
+    // 読み出しロック
+    pub fn lock_weak(&self) -> MutexGuard<'_, T> {
+        // self.lockedの操作をSpinLock0で保護する
+        let _lock = Spinlock0::claim();
         MutexGuard::new(self)
         // _lockがここでドロップされ、SpinLock0がreleaseされる
     }

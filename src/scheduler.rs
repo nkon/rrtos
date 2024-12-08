@@ -1,41 +1,46 @@
+use core::cell::UnsafeCell;
+
 use crate::linked_list::{LinkedList, ListItem};
+use crate::mutex::Mutex;
 use crate::task::Task;
 
 pub struct Scheduler<'a> {
-    list: LinkedList<'a, Task<'a>>,
+    ready: Mutex<UnsafeCell<LinkedList<'a, Task<'a>>>>,
 }
 
 impl<'a> Scheduler<'a> {
     pub const fn new() -> Self {
         Scheduler {
-            list: LinkedList::new(),
+            ready: Mutex::new(UnsafeCell::new(LinkedList::new())),
         }
     }
 
-    pub fn push_back(&mut self, item: &'a mut ListItem<'a, Task<'a>>) {
-        self.list.push_back(item);
+    pub fn push_back(&self, item: &'a mut ListItem<'a, Task<'a>>) {
+        unsafe { self.ready.lock().get().as_mut().unwrap().push_back(item) };
     }
 
-    fn schedule_next(&mut self) {
-        let current = self.list.pop_front().unwrap();
-        self.list.push_back(current);
+    fn schedule_next(&self) {
+        // let current = self.ready.pop_front().unwrap();
+        // self.ready.push_back(current);
+        unsafe { self.ready.lock().get().as_mut().unwrap().rotate() };
     }
 
-    pub fn exec(&mut self) -> ! {
+    pub fn exec(&self) -> ! {
         loop {
-            let current = self.list.front_mut();
-            if current.is_none() {
-                unimplemented!();
-            }
-            if let Some(p) = current {
-                p.exec();
+            match unsafe { self.ready.lock().get().as_mut().unwrap().front_mut() } {
+                None => {
+                    unimplemented!();
+                }
+                Some(p) => {
+                    p.exec();
+                }
             }
             self.schedule_next();
         }
     }
 
-    pub fn current_task(&mut self) -> Option<&mut Task<'a>> {
-        self.list.front_mut()
+    pub fn current_task(&self) -> Option<&mut Task<'a>> {
+        unsafe { self.ready.lock().get().as_mut().unwrap().front_mut() }
     }
 }
 

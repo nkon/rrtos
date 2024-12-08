@@ -7,7 +7,7 @@
 extern crate alloc;
 use alloc::boxed::Box;
 use core::{arch::asm, mem::MaybeUninit, ptr::addr_of_mut};
-use cortex_m::{asm::wfi, peripheral::syst::SystClkSource};
+use cortex_m::asm::wfi;
 use cortex_m_rt::entry;
 use defmt::*;
 use defmt_rtt as _;
@@ -32,7 +32,6 @@ use rrtos::{
 #[used]
 pub static BOOT_LOADER: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
-// TODO: タスクのスリープ機能を実装する。SYSTICKを使ったカウンタ、タスクの休止状態。
 fn app_main() -> ! {
     info!("app_main()");
     info!("CONTROL {:02b}", cortex_m::register::control::read().bits());
@@ -63,6 +62,11 @@ fn app_main3() -> ! {
     let mut i = 0;
     loop {
         info!("app_main3(): {}", i);
+        SCHEDULER
+            .lock()
+            .current_task()
+            .unwrap()
+            .wait_until(systick::count_get().wrapping_add(5));
         unsafe {
             asm!("svc 0");
         }
@@ -75,10 +79,7 @@ fn app_idle() -> ! {
     loop {
         info!("app_idle() wfi");
         wfi();
-        info!("app_idle() wakeup");
-        unsafe {
-            asm!("svc 0");
-        }
+        // SysTickによってsleepから目覚め、set PendSVによってタスクスイッチが発生し、次のタスクが実行される。
     }
 }
 
@@ -130,8 +131,9 @@ fn main() -> ! {
 
     // ここで core.SYSTをmoveする(同じくSYSTを使っているcortex_m::delay::Delayは同時には使えない)
     // リロード値の最高は 0xff_ffff(24bit)。125000 * 100 = 0xbe_bc20が遅い設定
-    // systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz()); // SysTick = 1ms(1kHz)
-    systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz() * 100); // SysTick = 100ms
+    systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz()); // SysTick = 1ms(1kHz)
+
+    // systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz() * 100); // SysTick = 100ms
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
@@ -170,8 +172,7 @@ fn main() -> ! {
     SCHEDULER.lock().push_back(item_idle);
     info!("idle_task is added");
 
-    // *SCHEDULER.lock() = *sched;
-    SCHEDULER.lock().exec();
+    SCHEDULER.lock_weak().exec();
 
     // loop {
     //     // info!("on!");
