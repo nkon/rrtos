@@ -56,6 +56,7 @@ impl<'a, T> LinkedList<'a, T> {
     }
 
     pub fn push_back(&mut self, item: &'a mut ListItem<'a, T>) {
+        item.next = None;
         let ptr = unsafe { NonNull::new_unchecked(item as *mut ListItem<T>) };
         let prev_last = self.last.replace(ptr);
         if prev_last.is_none() {
@@ -85,22 +86,8 @@ impl<'a, T> LinkedList<'a, T> {
     }
 
     pub fn rotate(&mut self) {
-        // let current = self.ready.pop_front().unwrap();
-        // self.ready.push_back(current);
-        let result = self.head.take();
-        let next = result.and_then(|mut ptr| unsafe { ptr.as_mut().next });
-        if next.is_none() {
-            return;
-        }
-        self.head = next;
-        let item = result.map(|ptr| unsafe { &mut *ptr.as_ptr() });
-        let ptr = unsafe { NonNull::new_unchecked(item.unwrap() as *mut ListItem<T>) };
-        let prev_last = self.last.replace(ptr);
-        if prev_last.is_none() {
-            self.head = Some(ptr);
-        } else if let Some(mut i) = prev_last {
-            unsafe { i.as_mut().next = Some(ptr) };
-        }
+        let current = self.pop_front().unwrap();
+        self.push_back(current);
     }
 }
 
@@ -108,6 +95,30 @@ impl<'a, T> LinkedList<'a, T> {
 mod test {
     use super::LinkedList;
     use super::ListItem;
+
+    #[test]
+    fn test_list_rotate() {
+        let mut item1 = ListItem::new(1);
+        let mut item2 = ListItem::new(2);
+        let mut list = LinkedList::new();
+
+        list.push_back(&mut item1);
+        list.push_back(&mut item2);
+        assert_eq!(Some(&mut 1), list.front_mut());
+
+        list.rotate();
+        assert_eq!(Some(&mut 2), list.front_mut());
+        list.rotate();
+        assert_eq!(Some(&mut 1), list.front_mut());
+
+        let result1: &u32 = list.pop_front().unwrap();
+        assert_eq!(1, *result1);
+        assert!(!list.is_empty());
+        assert_eq!(Some(&mut 2), list.front_mut());
+        let result2: &u32 = list.pop_front().unwrap();
+        assert_eq!(2, *result2);
+        assert!(list.is_empty());
+    }
 
     #[test]
     fn test_list() {

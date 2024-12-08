@@ -131,9 +131,8 @@ fn main() -> ! {
 
     // ここで core.SYSTをmoveする(同じくSYSTを使っているcortex_m::delay::Delayは同時には使えない)
     // リロード値の最高は 0xff_ffff(24bit)。125000 * 100 = 0xbe_bc20が遅い設定
-    systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz()); // SysTick = 1ms(1kHz)
-
-    // systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz() * 100); // SysTick = 100ms
+    // systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz()); // SysTick = 1ms(1kHz)
+    systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz() * 100); // SysTick = 100ms
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
