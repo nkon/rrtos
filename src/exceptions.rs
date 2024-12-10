@@ -2,11 +2,16 @@ use core::arch::asm;
 use cortex_m::peripheral::SCB;
 use cortex_m_rt::exception;
 
+// SVCall hander
+// PendSVをセットする⇒全ての割り込みを処理したあとPendSV handlerが呼ばれる
 #[exception]
 fn SVCall() {
     SCB::set_pendsv();
 }
 
+// PendSV handler
+// もしカーネルコンテキストから呼ばれたら⇒アプリケーションコンテキスト(PSP)にリターンする
+// もしアプリケーションコンテキストから呼ばれたら⇒カーネルコンテキスト(MSP)にリターンする
 #[exception]
 fn PendSV() {
     SCB::clear_pendsv();

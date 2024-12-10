@@ -35,6 +35,9 @@ pub fn count_get() -> u32 {
     SYSTICK_COUNT.lock().0
 }
 
+// SysTick handler
+// systick counterを増やす
+// PendSVをセットする⇒全ての割り込みが終わったあと PendSV handlerが呼ばれる
 #[exception]
 fn SysTick() {
     info!("SysTick:{}", systick::count_get());

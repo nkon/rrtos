@@ -11,7 +11,6 @@ use cortex_m::asm::wfi;
 use cortex_m_rt::entry;
 use defmt::*;
 use defmt_rtt as _;
-use embedded_hal::digital::OutputPin;
 use panic_probe as _;
 use rp2040_hal::{
     clocks::{init_clocks_and_plls, Clock},
@@ -21,8 +20,8 @@ use rp2040_hal::{
     watchdog::Watchdog,
 };
 use rrtos::{
+    led,
     linked_list::ListItem,
-    mutex::Mutex,
     rwlock::RwLock,
     scheduler::Scheduler,
     systick,
@@ -63,6 +62,7 @@ fn app_main3() -> ! {
     let mut i = 0;
     loop {
         info!("app_main3(): {}", i);
+        led::toggle();
         SCHEDULER
             .write()
             .current_task()
@@ -80,7 +80,9 @@ fn app_idle() -> ! {
     loop {
         info!("app_idle() wfi");
         wfi();
-        // SysTickによってsleepから目覚め、set PendSVによってタスクスイッチが発生し、次のタスクが実行される。
+        // SysTickによってsleepから目覚め、set PendSVによってタスクスイッチが発生する。
+        // 次のタスクが実行される。
+        // タスクリストの最期に、この行にやってくる⇒`loop`の先頭に戻る
     }
 }
 
@@ -126,7 +128,7 @@ fn main() -> ! {
     // If you have a Pico W and want to toggle a LED with a simple GPIO output pin, you can connect an external
     // LED to one of the GPIO pins, and reference that pin here. Don't forget adding an appropriate resistor
     // in series with the LED.
-    let mut led_pin = pins.gpio25.into_push_pull_output();
+    // let mut led_pin = pins.gpio25.into_push_pull_output();
 
     info!("system clock = {}", clocks.system_clock.freq().to_kHz()); // 125000kHz = 125MHz
 
@@ -134,6 +136,8 @@ fn main() -> ! {
     // リロード値の最高は 0xff_ffff(24bit)。125000 * 100 = 0xbe_bc20が遅い設定
     // systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz()); // SysTick = 1ms(1kHz)
     systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz() * 100); // SysTick = 100ms
+
+    led::init(pins.gpio25.into_push_pull_output());
 
     #[link_section = ".uninit.STACKS"]
     static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
@@ -173,15 +177,6 @@ fn main() -> ! {
     info!("idle_task is added");
 
     SCHEDULER.read().exec();
-
-    // loop {
-    //     // info!("on!");
-    //     led_pin.set_high().unwrap();
-    //     // delay.delay_ms(500);
-    //     // info!("off!");
-    //     led_pin.set_low().unwrap();
-    //     // delay.delay_ms(500);
-    // }
 }
 
 // End of file
