@@ -558,6 +558,52 @@ test test::test_list ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
+# デバイスドライバ
+
+カーネルモードで動作するライブラリとしてデバイスドライバを実装する。
+
+システムコール経由にすると重くなりすぎるのでライブラリが良いだろう。
+
+BSPもLEDドライバなどのライブラリを提供しているが、embedded-halの方針で、ライブラリを初期化すると、そのオブジェクトがそのスレッドに所有されてしまう。
+
+複数のスレッドからデバイス(LEDなど)にアクセスしたい場合はそれでは不便だ。
+
+カーネル側でデバイスオブジェクトを初期化・所有し、アプリ側からはカーネルのライブラリを呼ぶようにする。
+
+HALが提供する`Pin`構造体を、`Option`と`Mutex`でくるむ。そうするとRustと言えども、`static`な領域にオブジェクトを作成し、後から内部状態を変更することができる。
+
+* `Option`でくるんで、`const fn new()`で`None`に初期化する。
+*  オブジェクトにアクセスするときは`Mutex`の`lock`を取る(さらにその後、`Option`の`Some`を`unwrap()`する)。
+      + コンパイラが`as_mut`か`as_ref`かワカラナイので`as_mut()`の呼び出しを挟む。
+  
+
+
+```rust
+struct Led {
+    pin: Option<Pin<Gpio25, FunctionSio<SioOutput>, PullDown>>,
+}
+
+impl Led {
+    const fn new() -> Led {
+        Led { pin: None }
+    }
+}
+
+static LED: Mutex<Led> = Mutex::new(Led::new());
+
+pub fn init(pin: Pin<Gpio25, FunctionSio<SioOutput>, PullDown>) {
+    LED.lock().pin = Some(pin);
+}
+
+pub fn set_output(pin: bool) {
+    if pin {
+        let _ = LED.lock().pin.as_mut().unwrap().set_high();
+    } else {
+        let _ = LED.lock().pin.as_mut().unwrap().set_low();
+    }
+}
+
+```
 
 
 # gdb memo

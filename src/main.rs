@@ -6,7 +6,7 @@
 
 extern crate alloc;
 use alloc::boxed::Box;
-use core::{arch::asm, mem::MaybeUninit, ptr::addr_of_mut};
+use core::{mem::MaybeUninit, ptr::addr_of_mut};
 use cortex_m::asm::wfi;
 use cortex_m_rt::entry;
 use defmt::*;
@@ -24,7 +24,7 @@ use rrtos::{
     linked_list::ListItem,
     rwlock::RwLock,
     scheduler::Scheduler,
-    systick,
+    syscall, systick,
     task::{AlignedStack, Task},
 };
 
@@ -38,10 +38,8 @@ fn app_main() -> ! {
     let mut i = 0;
     loop {
         info!("app_main(): {}", i);
-        unsafe {
-            asm!("svc 0");
-        }
         i += 1;
+        syscall::back_to_kernel();
     }
 }
 
@@ -50,10 +48,8 @@ fn app_main2() -> ! {
     let mut i = 0;
     loop {
         info!("app_main2(): {}", i);
-        unsafe {
-            asm!("svc 0");
-        }
         i += 2;
+        syscall::back_to_kernel();
     }
 }
 
@@ -62,16 +58,14 @@ fn app_main3() -> ! {
     let mut i = 0;
     loop {
         info!("app_main3(): {}", i);
+        i += 3;
         led::toggle();
         SCHEDULER
             .write()
             .current_task()
             .unwrap()
             .wait_until(systick::count_get().wrapping_add(5));
-        unsafe {
-            asm!("svc 0");
-        }
-        i += 3;
+        syscall::back_to_kernel();
     }
 }
 
@@ -109,8 +103,6 @@ fn main() -> ! {
     )
     .ok()
     .unwrap();
-
-    // let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
     let pins = Pins::new(
         pac.IO_BANK0,
