@@ -41,15 +41,16 @@ Raspberry Pi Pico(RP2040)上で動作するRTOSを自作する。技術コンセ
   - [Rustでの`Mutex`](#rustでのmutex)
   - [`Mutex`と`RwLock`](#mutexとrwlock)
   - [実装例](#実装例)
+- [グローバル・アロケータと`alloc`クレート](#グローバルアロケータとallocクレート)
+- [alloc::boxed::Box, Box::leak()](#allocboxedbox-boxleak)
 - [SysTickハンドラ](#systickハンドラ)
-- [alloc::boxed::Box, Box::leak(), GlobalAlloc](#allocboxedbox-boxleak-globalalloc)
 - [デバイスドライバ](#デバイスドライバ)
   - [リソースの共有方法](#リソースの共有方法)
 - [gdbの使い方](#gdbの使い方)
 - [参考文献](#参考文献)
 
 <!-- Created by https://github.com/ekalinin/github-markdown-toc -->
-<!-- Added by: nkon, at: 2024年 12月16日 月曜日 22時23分04秒 CST -->
+<!-- Added by: nkon, at: 2024年 12月17日 火曜日 22時16分37秒 CST -->
 
 <!--te-->
 
@@ -795,6 +796,88 @@ unsafe impl<T> Sync for MutexGuard<'_, T> where T: Sync {}
 unsafe impl<T> Send for MutexGuard<'_, T> where T: Send {}
 ```
 
+## グローバル・アロケータと`alloc`クレート
+
+タスク構造体やリンクリストのノードをヒープに割り当てるためにグローバルアロケータを実装する。ここでは、一番簡単な実装として、Bump Pointer Allocを用いる。領域を割り当てるときにポインタが前進(Bump)するだけ。領域を開放してもヒープには戻らない。
+
+グローバルアロケータが存在すると、`no_std`環境でも、`core`クレートに加えて`alloc`クレートが使え、`Box`や`Vec`などが使える。
+
+* `BumpPointerAlloc`という構造体が、ヒープ全体を管理する。ヒープの先頭とサイズの2つのメンバを持つ。
+    + ヒープの先頭とサイズは、メモリマップを考慮して、即値で指定する。
+* `alloc()`は、アライメントに注意して、割り当てる領域の先頭のポインタを返し、未割り当て領域のポインタを進める。
+* 作成したアロケータを`Mutex`で囲って、それを`#[global_allocator]`に指定する。
+
+```rust
+// Bump pointer allocator implementation
+// ポインタを増加するだけのアロケータ実装
+
+use crate::mutex::Mutex;
+use core::alloc::{GlobalAlloc, Layout};
+use core::cell::UnsafeCell;
+use core::ptr::{self};
+
+struct BumpPointerAlloc {
+    head: UnsafeCell<usize>,
+    end: usize,
+}
+
+// 使っていないSRAM領域中に、ヒープ領域を即値で定義する。
+// この領域が他に使われないことはプログラマが保証しなければならない。
+const HEAD_ADDR: usize = 0x2001_0000;
+const HEAP_SIZE: usize = 1024;
+
+unsafe impl Sync for BumpPointerAlloc {}
+
+impl BumpPointerAlloc {
+    const fn new() -> Self {
+        Self {
+            head: UnsafeCell::new(HEAD_ADDR),
+            end: HEAD_ADDR + HEAP_SIZE,
+        }
+    }
+
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let head = self.head.get();
+        let size = layout.size();
+        let align = layout.align();
+        let align_mask = !(align - 1);
+
+        // move start up to the next alignment boundary
+        let start = (*head + align - 1) & align_mask;
+
+        if start + size > self.end {
+            // a null pointer signal an Out Of Memory condition
+            ptr::null_mut()
+        } else {
+            *head = start + size;
+            start as *mut u8
+        }
+    }
+
+    unsafe fn dealloc(&self, _: *mut u8, _: Layout) {
+        // this allocator never deallocates memory
+    }
+}
+
+unsafe impl GlobalAlloc for Mutex<BumpPointerAlloc> {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        self.lock().alloc(layout)
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        self.lock().dealloc(ptr, layout);
+    }
+}
+
+// グローバルメモリアロケータの宣言
+#[global_allocator]
+static HEAP: Mutex<BumpPointerAlloc> = Mutex::new(BumpPointerAlloc::new());
+```
+
+領域を開放したらヒープに回収されたい場合、リンクリストなどを使って空き領域を管理する方法が知られている。ただし、これも、細切れになった領域をマージしていかないと、結局、割り当てることができなくなってしまう。
+
+実用的なアロケータの設計は難しく、Cの標準の`malloc`に対してより効率的な代替アロケータが提案されている。それらは`LD_PRELOAD`やダイナミックリンクのしくみを使って、標準の`malloc()`を置き換えることで利用する。
+
+## alloc::boxed::Box, Box::leak()
 
 
 ## SysTickハンドラ
@@ -888,11 +971,6 @@ fn SysTick() {
     systick::init(&mut core.SYST, clocks.system_clock.freq().to_kHz() * 100); // SysTick = 100ms
 ```
 
-
-
-## alloc::boxed::Box, Box::leak(), GlobalAlloc
-
-
 ## デバイスドライバ
 
 SysTickに限らず、GPIOなど、MCUは多くのペリフェラルを提供する。一般に、それらはレジスタに対するアクセスで、CMSISで定義され、チップメーカからはSVD(System View Description)という形で公開される。`svd2rst`というツールを使えばrustの雛形が生成される。
@@ -913,8 +991,8 @@ SysTickに限らず、GPIOなど、MCUは多くのペリフェラルを提供す
 
 * 構造体自体は`static`となる。表面上は`mut`ではないが、`Mutex`(の中の`UnsafeCell`)によって内部可変となる。
 * 共有リソースへのアクセスを排他制御するために`Mutex`で囲む。
-* `&'static mut`となるので、デフォルトの初期化が行われるが、それは`const fn`でなければならない。とりあえず`Option`でくるみ`None`で初期化しておく。
-* 実際の初期化時に`init`を呼び、ペリフェラルの設定と初期化を行なう。それを`init()`に渡して、Mutexの中身を`replace()`で置き換える(代入ではなく内部可変の関数を使う)。
+* `static`変数のデフォルトの初期化が行われるが、それは`const fn`でなければならない。とりあえず`Option`でくるみ`None`で初期化しておく。
+* 実際の初期化時に`init()`を呼び、ペリフェラルの設定と初期化を行なう。デバイスリソースを`cortex_m`の流儀で確保&初期化し、それを`init()`に渡して、Mutexの中身を`replace()`で置き換える(代入ではなく内部可変の操作を行う)。
 
 [https://tomoyuki-nakabayashi.github.io/book/concurrency/index.html](https://tomoyuki-nakabayashi.github.io/book/concurrency/index.html)こちらでは実行時チェックのため`RefCell`を重ねている。`RefCell`はアトミック演算を使っているのでCortex-M0+では使えない。Mutexが実装に用いている`UnsafeCell`を信用することにする。また、Mutexの実装に`cortex_m::interrupt::Mutex`を使っているが、RP2040ではマルチコアのために、使えない。ただし、基本的な考え方は同じである。
 
