@@ -11,36 +11,42 @@ Raspberry Pi Pico(RP2040)上で動作するRTOSを自作する。技術コンセ
 
 
 <!--ts-->
-   * [主な構成と機能](#主な構成と機能)
-   * [プロジェクトの作成](#プロジェクトの作成)
-   * [前提とするハードウエア](#前提とするハードウエア)
-      * [#[entry]](#entry)
-      * [#[pre_init]](#pre_init)
-      * [#[exception]](#exception)
-   * [Cortex-M0+(ARM-v6M,thumbv6m) で注意すること](#cortex-m0arm-v6mthumbv6m-で注意すること)
-      * [アトミック命令](#アトミック命令)
-      * [即値命令](#即値命令)
-      * [スタックに積めるレジスタ](#スタックに積めるレジスタ)
-   * [関数呼び出し手順(AAPCS: Arm Architecture Procedure Call Standard)](#関数呼び出し手順aapcs-arm-architecture-procedure-call-standard)
-      * [コアレジスタ](#コアレジスタ)
-   * [RP2040で注意すること](#rp2040で注意すること)
-      * [SIO::SpinLock](#siospinlock)
-      * [boot2](#boot2)
-   * [タスク切換え](#タスク切換え)
-      * [特権モード](#特権モード)
-      * [例外フレーム](#例外フレーム)
-      * [タスク切換えの実装(SVCall Handler)](#タスク切換えの実装svcall-handler)
-      * [メモリマップ](#メモリマップ)
-      * [タスクスタック領域の初期化](#タスクスタック領域の初期化)
-      * [タスク構造体](#タスク構造体)
-      * [タスク切換えの実装(fn execute_task)](#タスク切換えの実装fn-execute_task)
-   * [Mutexの実装](#mutexの実装)
-      * [RustでのMutex](#rustでのmutex)
-      * [実装例](#実装例)
-   * [SysTickハンドラ](#systickハンドラ)
-   * [alloc::boxed::Box, Box::leak(), GlobalAlloc](#allocboxedbox-boxleak-globalalloc)
-   * [gdbの使い方](#gdbの使い方)
-   * [参考文献](#参考文献)
+- [主な構成と機能](#主な構成と機能)
+- [プロジェクトの作成](#プロジェクトの作成)
+- [前提とするハードウエア](#前提とするハードウエア)
+- [`cortex-m-rt`によるエントリーポイント、初期化ルーチン、例外ハンドラ](#cortex-m-rtによるエントリーポイント初期化ルーチン例外ハンドラ)
+  - [`#[entry]`](#entry)
+  - [`#[pre_init]`](#pre_init)
+  - [`#[exception]`](#exception)
+  - [`VTOR`と割り込みベクタのアドレス](#vtorと割り込みベクタのアドレス)
+- [Cortex-M0+(ARM-v6M,thumbv6m) で注意すること](#cortex-m0arm-v6mthumbv6m-で注意すること)
+  - [アトミック命令](#アトミック命令)
+  - [即値命令](#即値命令)
+  - [スタックに積めるレジスタ](#スタックに積めるレジスタ)
+  - [`ldmia`,`stmia`が元レジスタを壊す](#ldmiastmiaが元レジスタを壊す)
+- [関数呼び出し手順(AAPCS: Arm Architecture Procedure Call Standard)](#関数呼び出し手順aapcs-arm-architecture-procedure-call-standard)
+  - [コアレジスタ](#コアレジスタ)
+- [RP2040で注意すること](#rp2040で注意すること)
+  - [SIO::SpinLock](#siospinlock)
+  - [boot2](#boot2)
+- [タスク切換え](#タスク切換え)
+  - [特権モード](#特権モード)
+  - [例外フレーム](#例外フレーム)
+  - [タスク切換えの実装(SVCall Handler)](#タスク切換えの実装svcall-handler)
+  - [メモリマップ](#メモリマップ)
+  - [タスクスタック領域の初期化](#タスクスタック領域の初期化)
+  - [タスク構造体](#タスク構造体)
+  - [タスク切換えの実装(fn execute\_task)](#タスク切換えの実装fn-execute_task)
+- [Mutexの実装](#mutexの実装)
+  - [Rustでの`Mutex`](#rustでのmutex)
+  - [`Mutex`と`RwLock`](#mutexとrwlock)
+  - [実装例](#実装例)
+- [SysTickハンドラ](#systickハンドラ)
+- [alloc::boxed::Box, Box::leak(), GlobalAlloc](#allocboxedbox-boxleak-globalalloc)
+- [デバイスドライバ](#デバイスドライバ)
+  - [リソースの共有方法](#リソースの共有方法)
+- [gdbの使い方](#gdbの使い方)
+- [参考文献](#参考文献)
 
 <!-- Created by https://github.com/ekalinin/github-markdown-toc -->
 <!-- Added by: nkon, at: 2024年 12月16日 月曜日 22時23分04秒 CST -->
@@ -887,9 +893,63 @@ fn SysTick() {
 ## alloc::boxed::Box, Box::leak(), GlobalAlloc
 
 
+## デバイスドライバ
 
+SysTickに限らず、GPIOなど、MCUは多くのペリフェラルを提供する。一般に、それらはレジスタに対するアクセスで、CMSISで定義され、チップメーカからはSVD(System View Description)という形で公開される。`svd2rst`というツールを使えばrustの雛形が生成される。
 
+`cortex_m`の枠組みでは、それらはPAC(Peripheral Access Crate)として実装される。そして、RAII(Resource Acquisition Is Initialization)の考え方から、初期化時に所有権が取得され、変数に束縛される。
 
+ペリフェラル、たとえばLEDなどは、それぞれのタスクからアクセスしたいが、`main`で初期化すると、そのスコープに所有権が取られる。
+
+* 解決策１。ペリフェラル全体を表す構造体を作成し、そこから呼び出される関数に`&mut`として、渡して引き継いでいく、という方法がある。しかし、複数のタスクが非同期に呼び出されるRTOSの環境では難しい。
+* 解決策２。ペリフェラルはカーネルが初期化し、カーネルが所有する。タスク側からはシステムコールを通じてペリフェラルにアクセスする。一般的なOSの役割としてハードウエアを抽象化して管理する、というものがあり、通常のOS的な考え方だが、RTOSとしてはオーバヘッドが大きい。
+* 解決策３。複数のタスクからペリフェラルにアクセスできるライブラリとしてRTOSがデバイスドライバを提供する。複数タスク間でのリソース共有はデバイスドライバが吸収する。この場合、デバイスドライバはタスクのコンテクストで実行される。
+
+ここでは3つめの方法を選択する。
+
+### リソースの共有方法
+
+本来的な性質としてペリフェラルは`&'static mut`となるが、Rustでは制限が非常に厳しい。それを回避する方法として、`Mutex`と`Option`でくるむ。
+
+* 構造体自体は`static`となる。表面上は`mut`ではないが、`Mutex`(の中の`UnsafeCell`)によって内部可変となる。
+* 共有リソースへのアクセスを排他制御するために`Mutex`で囲む。
+* `&'static mut`となるので、デフォルトの初期化が行われるが、それは`const fn`でなければならない。とりあえず`Option`でくるみ`None`で初期化しておく。
+* 実際の初期化時に`init`を呼び、ペリフェラルの設定と初期化を行なう。それを`init()`に渡して、Mutexの中身を`replace()`で置き換える(代入ではなく内部可変の関数を使う)。
+
+[https://tomoyuki-nakabayashi.github.io/book/concurrency/index.html](https://tomoyuki-nakabayashi.github.io/book/concurrency/index.html)こちらでは実行時チェックのため`RefCell`を重ねている。`RefCell`はアトミック演算を使っているのでCortex-M0+では使えない。Mutexが実装に用いている`UnsafeCell`を信用することにする。また、Mutexの実装に`cortex_m::interrupt::Mutex`を使っているが、RP2040ではマルチコアのために、使えない。ただし、基本的な考え方は同じである。
+
+```rust
+use embedded_hal::digital::{OutputPin, StatefulOutputPin};
+use rp2040_hal::gpio::{bank0::Gpio25, FunctionSio, Pin, PullDown, SioOutput};
+
+use crate::mutex::Mutex;
+
+static LED: Mutex<Option<Pin<Gpio25, FunctionSio<SioOutput>, PullDown>>> = Mutex::new(None);
+
+pub fn init(pin: Pin<Gpio25, FunctionSio<SioOutput>, PullDown>) {
+    LED.lock().replace(pin);
+}
+
+pub fn set_output(pin: bool) {
+    if pin {
+        let _ = LED.lock().as_mut().unwrap().set_high();
+    } else {
+        let _ = LED.lock().as_mut().unwrap().set_low();
+    }
+}
+
+pub fn toggle() {
+    let _ = LED.lock().as_mut().unwrap().toggle();
+}
+```
+カーネルの先頭で初期化
+```rust
+    led::init(pins.gpio25.into_push_pull_output());
+```
+アプリの中から呼ぶとき
+```rust
+        led::toggle();
+```
 
 ## gdbの使い方
 
