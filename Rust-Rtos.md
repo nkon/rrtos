@@ -5,14 +5,26 @@ category: blog
 tags: rust embedded RasPico RTOS cortex-m
 ---
 
-Raspberry Pi Pico(RP2040)上で動作するRTOSを自作する。技術コンセプトの実証のためのプロトタイプだが、タスク切換え、SysTickのハンドリング、タスクの停止、システムコール、などの機能を持っている。類似の多くの情報があるが、Cortex-M3のマイコンをターゲットにしたものが多い。RP2040はCortex-M0+コアであり、更にマルチコアであり、それらの既存の情報がうまく適用できない場面が多い。本記事は、とくに差異において注意する点をとりあげた。また、組み込みRustの分野は進歩が早く、できるだけ新しいプラットフォーム(Embedded-Rustチームが提供する`cortex-m`, `cortex-m-rt`, HALなど)を活用するようにした。
+Raspberry Pi Pico(RP2040)上で動作するRTOS(Real Time OS:リアルタイムOS)を自作する。技術コンセプトの実証のためのプロトタイプだが、タスク切換え、SysTickのハンドリング、タスクの停止、システムコール、などの機能を持っている。類似の多くの情報があるが、Cortex-M3のマイコンをターゲットにしたものが多い。RP2040はCortex-M0+コアであり、更にマルチコアであり、それらの既存の情報がうまく適用できない場面が多い。本記事は、とくに差異において注意する点をとりあげた。また、組み込みRustの分野は進歩が早く、できるだけ新しいプラットフォーム(Embedded-Rustチームが提供する`cortex-m`, `cortex-m-rt`, HALなど)を活用するようにした。
 
-参考書籍として、、、、、、、
+主に『[Rustで始める自作組み込みOS入門](https://nextpublishing.jp/book/14912.html)』の内容をなぞっているが、必要な箇所についてはCortex-M0+対応している。並列処理のコア部分については『[詳解 Rustアトミック操作とロック](https://www.oreilly.co.jp/books/9784814400515/)』が非常に参考になる。RP2040固有部分については『[インターフェイス 2024年11月 ゼロから作るマルチコアOS](https://interface.cqpub.co.jp/magazine/202411/)』を参考にした。
 
+RTOSを実装ということでは、タスク切換えがコアな技術となる。
+
+それだけではなく、次のような技術が必然的に必要となり、それらはRTOS以外にも応用がきく技術だ。とくに、MutexとCellについては、この課題によって格段に自然に使いこなせるようにになった。
+
+* プラットフォームであるARMの関数呼び出し規約、アセンブラ(ARM特有の命令、Cortex-M0とM3の違い)、インラインアセンブラの書き方
+* マルチコアのハンドリング
+* メモリマップの設計とリンカスクリプトやコンパイラ注釈を利用した割り当て方法
+* ハードウエアリソースの初期化と複数タスクへの共有の方法。ハードウエア・レジスタは本質的に`&'static mut`となるが、Rustはデータ保護のために、そういうものを容認していない。`Mutex`によるロック、`Cell`による内部可変、`Option`による定数初期化などの技術が必要
+* `Mutex`の実装、その裏にあるアトミック操作の実装と本質
+* グローバル・アロケータの実装
+
+## 目次
 
 <!--ts-->
+- [目次](#目次)
 - [主な構成と機能](#主な構成と機能)
-- [プロジェクトの作成](#プロジェクトの作成)
 - [前提とするハードウエア](#前提とするハードウエア)
 - [`cortex-m-rt`によるエントリーポイント、初期化ルーチン、例外ハンドラ](#cortex-m-rtによるエントリーポイント初期化ルーチン例外ハンドラ)
   - [`#[entry]`](#entry)
@@ -55,17 +67,29 @@ Raspberry Pi Pico(RP2040)上で動作するRTOSを自作する。技術コンセ
 - [参考文献](#参考文献)
 
 <!-- Created by https://github.com/ekalinin/github-markdown-toc -->
-<!-- Added by: nkon, at: 2024年 12月17日 火曜日 22時16分37秒 CST -->
+<!-- Added by: nkon, at: 2024年 12月18日 水曜日 21時35分54秒 CST -->
 
 <!--te-->
 
 ## 主な構成と機能
 
-
-## プロジェクトの作成
+* Raspberry Pi Pico上のRP2040上で動作するRTOS
+    + Cortex-M0+(ARM-v6M:thumbv6m)のデュアルコア
+        - 割り込み禁止によるクリティカルセクションではなく、RP2040のコアのSpinLockペリフェラルを使って排他制御を行う
+* SysTickを使った強制タスクスイッチ(非協調マルチタスク)で複数のタスクをを切り替えて並列実行する
+    + タスクの優先度は未実装
+    + リソースを消費し続けるアプリケーションタスクからも他のタスクに実行権が移る
+    + アイドルタスクが実行されている間はWFIでスリープする
+    + タスクのスリープを実装し、他のタスクを実行しているあいだ、そのタスクを休止することができる
+* Embedded Rust プロジェクトで提供されるフレームワーク(`cortex_m`,`cortex_m_rt`,Peripheral Access Crate(PAC)など)を利用する
+* Mutex, グローバルアロケータを実装し、`alloc`クレートが使える
+* ボード上のLEDを駆動するためのデバイスドライバを実装し、複数のアプリケーションタスクからデバイスを駆動できる  
 
 ## 前提とするハードウエア
 
+RP2040を搭載したRaspberry Pi Picoをハードウエアとする。安価だが、一般的に用いられているCortex-M3のシングルコアMCUとは違う点が多い。
+
+プロジェクトの立ち上げ方法については[別記事(Raspberry Pi PicoとRustで組み込みプログラム環境を整える)を参照](https://nkon.github.io/RasPico-Rust/)。
 
 ## `cortex-m-rt`によるエントリーポイント、初期化ルーチン、例外ハンドラ
 
@@ -1188,7 +1212,25 @@ pub fn toggle() {
 
 RTOSではアセンブラレベルで命令を実行し、CPUのレジスタを直接操作する。GDBでのステップ実行による解析がデバッグには必須。
 
-[以前に自分で書いたメモ](https://nkon.github.io/Gdb-basic/)も非常に役にたった。今回も、[使い方メモ]()をまとめておくと、きっと何年かあとの自分の役に立つだろう。
+[以前に自分で書いたメモ](https://nkon.github.io/Gdb-basic/)も非常に役にたった。今回も、あらためて[使い方メモ]()をまとめておく。きっと何年かあとの自分の役に立つだろう。
 
 
 ## 参考文献
+
+* [Rustで始める自作組み込みOS入門](https://nextpublishing.jp/book/14912.html)
+* [詳解 Rustアトミック操作とロック](https://www.oreilly.co.jp/books/9784814400515/)
+* [インターフェイス 2024年11月 ゼロから作るマルチコアOS](https://interface.cqpub.co.jp/magazine/202411/)
+* [Procedure Call Standard for Arm Architecture (AAPCS)](https://developer.arm.com/documentation/107656/0101/Getting-started-with-Armv8-M-based-systems/Procedure-Call-Standard-for-Arm-Architecture--AAPCS-)
+* [ARM®v6-M Architecture Reference Manual](https://developer.arm.com/documentation/ddi0419/latest/)
+* [Cortex-M0+ Technical Reference Manual](https://developer.arm.com/documentation/ddi0484/latest/)
+* [ARM® Cortex®-M mbed™ SDK and HDK deep-dive](https://os.mbed.com/media/uploads/MACRUM/cortex-m_mbed_deep-dive_20140704a.pdf)
+* [ARM Cortex-M RTOS Context Switching](https://interrupt.memfault.com/blog/cortex-m-rtos-context-switching)
+* [FreeRTOS(Cortex-M)のコンテキストスイッチ周りを調べてみた](https://zenn.dev/lowlvengineer/articles/f87393345bb506)
+* [rp2040のPendSVでコンテキストスイッチをしよう](https://qiita.com/DanfuncL/items/b8b5a8bd03973880acfd)
+* [ARM関連(cortex-Mシリーズ)のCPUメモ](https://qiita.com/tom_S/items/52e4afdb379dff2cf18a)
+* [ARM Cortex-M 32ビットマイコンでベアメタル "Safe" Rust](https://qiita.com/tatsuya6502/items/7d8aaf3792bdb5b66f93)
+* [Cortex-M0+ CPU Core and ARM Instruction Set Architecture](https://wordpress-courses1920.wolfware.ncsu.edu/ece-461-001-sprg-2020/wp-content/uploads/sites/106/2020/01/ARM-ISA-and-Cortex-M0.pdf)
+
+
+
+
