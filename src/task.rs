@@ -1,4 +1,4 @@
-use crate::systick;
+use crate::{syscall, systick};
 use core::arch::asm;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
@@ -69,6 +69,7 @@ impl<'a> Task<'a> {
         // info!("wait_until({})", tick);
         self.wait_until = Some(tick);
         self.state = TaskState::Blocked;
+        syscall::back_to_kernel();
     }
 }
 

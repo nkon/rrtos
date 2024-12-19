@@ -7,7 +7,7 @@
 extern crate alloc;
 use alloc::boxed::Box;
 use core::{mem::MaybeUninit, ptr::addr_of_mut};
-use cortex_m::asm::wfi;
+use cortex_m::asm::{self, wfi};
 use cortex_m_rt::entry;
 use defmt::*;
 use defmt_rtt as _;
@@ -48,8 +48,10 @@ fn app_main2() -> ! {
     let mut i = 0;
     loop {
         info!("app_main2(): {}", i);
-        i += 2;
-        syscall::back_to_kernel();
+        i += 1;
+        for _j in 0..1000000 {
+            asm::nop();
+        }
     }
 }
 
@@ -65,7 +67,6 @@ fn app_main3() -> ! {
             .current_task()
             .unwrap()
             .wait_until(systick::count_get().wrapping_add(5));
-        syscall::back_to_kernel();
     }
 }
 

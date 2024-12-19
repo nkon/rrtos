@@ -37,6 +37,11 @@ Raspberry Pi Pico(RP2040)上で動作するRTOSを自作する。技術コンセ
   - [タスクスタック領域の初期化](#タスクスタック領域の初期化)
   - [タスク構造体](#タスク構造体)
   - [タスク切換えの実装(fn execute\_task)](#タスク切換えの実装fn-execute_task)
+- [タスクスケジューラ](#タスクスケジューラ)
+  - [タスクを次々に実行する](#タスクを次々に実行する)
+  - [アイドルタスクでスリープする](#アイドルタスクでスリープする)
+  - [タスクの休止状態とスリープ](#タスクの休止状態とスリープ)
+  - [タスクの生成とスケジューラへの登録](#タスクの生成とスケジューラへの登録)
 - [Mutexの実装](#mutexの実装)
   - [Rustでの`Mutex`](#rustでのmutex)
   - [`Mutex`と`RwLock`](#mutexとrwlock)
@@ -692,6 +697,156 @@ fn execute_task(mut sp: u32, regs: u32) -> u32 {
 * タスクの`PSP`を`fn execute_task()`の戻り値として返す
     + このタスク実行の間にSPが変化しているので、次の実行再開に備えて`PSP`をタスク構造体に上書き保存する。
 
+## タスクスケジューラ
+
+### タスクを次々に実行する
+
+タスク構造体を作成し、リストにつなげ、それぞれのタスクごとに上記の`Task::exec()`を呼び出せば、次々にタスクが実行される。それぞれのタスクは無限ループとして実行される。
+
+タスクの無限ループのなかで、`svc`命令を呼び出せば、カーネル側(カーネル側ではタスクスケジュールが実行されている)に制御が戻り、タスクスケジューラによって次のタスクの実行が再開される。
+
+`asm!("svc 0")`をラップするような`back_to_kernel()`というライブラリ関数を提供し、アプリ側はそれを呼ぶことによって、協調的マルチタスクが実現される。
+
+```rust
+pub fn back_to_kernel() {
+    unsafe {
+        asm!("svc 0");
+    }
+}
+
+fn app_main() -> ! {
+    let mut i = 0;
+    loop {
+        info!("app_main(): {}", i);
+        i += 1;
+        syscall::back_to_kernel();
+    }
+}
+```
+
+### アイドルタスクでスリープする
+
+組み込みソフトウエアにとっては低消費電力化は必須だ。通常のRTOSを使ったシステムでは、最低優先度のタスクとしてアイドルタスクを作成し、その中で`cortex_m::asm::wfi()`を呼び出してスリープする。
+
+一方で、SysTickタイマが定期的に例外を発生させるので、それによってタスクの実行が再開される。
+
+今回はタスク優先度を未実装なので、タスクチェーンの中にアイドルタスクをつなげておくことによって、他のタスクの実行が完了したらSysTick割り込みがかかるまではスリープするようにする。
+
+また、あるタスクが無限ループで他のタスクに実行を譲渡しない場合場合でも、SysTickタイマによって、カーネルに制御が戻るようにしておけば、そのタイミングで他のタスクに強制的に実行がうつる。非協調的マルチタスクが実現される。リアルタイムOSを自称するのであれば、あるタスクがCPU時間を消費しようとしていても、必要な他のタスクに実行を移さなければリアルタイム性は実現できない。
+
+```rust
+// 無限ループタスク。SysTick割り込みによってタスクスケジューラに制御が戻され、次のタスクが実行される
+fn app_main2() -> ! {
+    let mut i = 0;
+    loop {
+        info!("app_main2(): {}", i);
+        i += 1;
+        for _j in 0..1000000 {
+            asm::nop();
+        }
+    }
+}
+
+// アイドルタスク。このタスクが実行されるとMCUはスリープする。SysTick割り込みや他の割り込みで目覚める
+fn app_idle() -> ! {
+    loop {
+        info!("app_idle() wfi");
+        cortex_m::asm::wfi();
+    }
+}
+
+// SysTickハンドラ。カウンタを増加させ、カーネル(タスクスケジューラ)に制御を戻す
+#[exception]
+fn SysTick() {
+    systick::count_incr();
+    asm!("svc 0");
+}
+```
+
+### タスクの休止状態とスリープ
+
+タスクの状態として、`Ready`(タスクスケジューラによって実行が与えられたら実行可能な状態)と`Blocked`(実行が与えられても実行ができない状態)を定義し、これらをタスク構造体のメンバとしてもたせる。
+
+実行できない状態とは、(未実装だが)データを受信待ちしている状態であったり、タスクがスリープしている状態だ。
+
+これを使えば、Delay機能が実現される。このタスクは指定した時間だけ実行が停止するが、その間も他のタスクは実行を継続する。
+
+システムでは、SysTickが(通常1msごとに)にカウンタを増やしている。`wait_until()`関数で現在のカウント値より5先の値を指定すれば、それまでタスクは`Blocked`状態になり実行されない。これによってマルチタスクでLEDが点滅する。
+
+```rust
+    pub fn wait_until(&mut self, tick: u32) {
+        self.wait_until = Some(tick);
+        self.state = TaskState::Blocked;
+        syscall::back_to_kernel();
+    }
+
+fn app_main3() -> ! {
+    let mut i = 0;
+    loop {
+        info!("app_main3(): {}", i);
+        i += 1;
+        led::toggle();
+        SCHEDULER
+            .write()
+            .current_task()
+            .unwrap()
+            .wait_until(systick::count_get().wrapping_add(5));
+    }
+}
+```
+
+### タスクの生成とスケジューラへの登録
+
+かなりベタだが、次のコードでタスクを生成してタスクスケジューラに登録している。
+
+* `.uninit`セクションにアプリケーションスタックを割り当て
+* タスクをヒープ上に生成し
+* リンクノードをヒープ上に生成し
+* タスク・スケジューラのリンクリストに登録する
+
+最期にタスクスケジューラの実行を開始。
+
+```rust
+    #[link_section = ".uninit.STACKS"]
+    static mut APP_STACK: AlignedStack = AlignedStack(MaybeUninit::uninit());
+    let task = Box::new(Task::new(
+        unsafe { &mut *addr_of_mut!(APP_STACK) },
+        app_main,
+    ));
+    let item: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*task)));
+    SCHEDULER.write().push_back(item);
+    info!("task is added");
+
+    #[link_section = ".uninit.STACKS"]
+    static mut APP_STACK2: AlignedStack = AlignedStack(MaybeUninit::uninit());
+    let task2 = Box::new(Task::new(
+        unsafe { &mut *addr_of_mut!(APP_STACK2) },
+        app_main2,
+    ));
+    let item2: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*task2)));
+    SCHEDULER.write().push_back(item2);
+    info!("task2 is added");
+
+    #[link_section = ".uninit.STACKS"]
+    static mut APP_STACK3: AlignedStack = AlignedStack(MaybeUninit::uninit());
+    let task3 = Box::new(Task::new(
+        unsafe { &mut *addr_of_mut!(APP_STACK3) },
+        app_main3,
+    ));
+    let item3: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*task3)));
+    SCHEDULER.write().push_back(item3);
+    info!("task3 is added");
+
+    #[link_section = ".uninit.STACKS"]
+    static mut APP_IDLE: AlignedStack = AlignedStack(MaybeUninit::uninit());
+    let idle_task = Box::new(Task::new(unsafe { &mut *addr_of_mut!(APP_IDLE) }, app_idle));
+    let item_idle: &'static mut ListItem<Task> = Box::leak(Box::new(ListItem::new(*idle_task)));
+    SCHEDULER.write().push_back(item_idle);
+    info!("idle_task is added");
+
+    SCHEDULER.read().exec();
+```
+
 ## Mutexの実装
 
 RTOSの実装には、どうしてもタスク間、タスク-カーネル間で共有されるデータが存在する。Rustでは言語レベルで変数の共有が禁止されており、それを「かいくぐる」ために`Mutex`が使われる。`Mutex`の実装は`unsafe`だが、`Mutex`を使うときには`unsafe`は不要。
@@ -1030,6 +1185,10 @@ pub fn toggle() {
 ```
 
 ## gdbの使い方
+
+RTOSではアセンブラレベルで命令を実行し、CPUのレジスタを直接操作する。GDBでのステップ実行による解析がデバッグには必須。
+
+[以前に自分で書いたメモ](https://nkon.github.io/Gdb-basic/)も非常に役にたった。今回も、[使い方メモ]()をまとめておくと、きっと何年かあとの自分の役に立つだろう。
 
 
 ## 参考文献
