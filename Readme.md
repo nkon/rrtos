@@ -45,6 +45,6 @@ RTOSの基本的な機能として、次のものが実装されています。
 
 * 本レポジトリからソースコードとヒストリが参照できます。
 * [設計と実装の解説]()
-* [GDBメモ1]()
-* [GDBメモ2]()
+* [GDBメモ1](https://nkon.github.io/Gdb-basic/)
+* [GDBメモ2](https://nkon.github.io/Gdb-Memo/)
 * [実装中のノート]()
