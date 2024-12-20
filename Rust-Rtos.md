@@ -2,7 +2,7 @@
 layout: post
 title: RustでRTOSを作る(RP2040, Cortex-M0+)
 category: blog
-tags: rust embedded RasPico RTOS cortex-m
+tags: rust embedded RasPico RP2040 RTOS cortex-m
 ---
 
 Raspberry Pi Pico(RP2040)上で動作するRTOS(Real Time OS:リアルタイムOS)を自作する。技術コンセプトの実証のためのプロトタイプだが、タスク切換え、SysTickのハンドリング、タスクの停止、システムコール、などの機能を持っている。類似の多くの情報があるが、Cortex-M3のマイコンをターゲットにしたものが多い。RP2040はCortex-M0+コアであり、更にマルチコアであり、それらの既存の情報がうまく適用できない場面が多い。本記事は、とくに差異において注意する点をとりあげた。また、組み込みRustの分野は進歩が早く、できるだけ新しいプラットフォーム(Embedded-Rustチームが提供する`cortex-m`, `cortex-m-rt`, HALなど)を活用するようにした。
