@@ -44,7 +44,8 @@ RTOSの基本的な機能として、次のものが実装されています。
 ---
 
 * 本レポジトリからソースコードとヒストリが参照できます。
-* [設計と実装の解説]()
+* [設計と実装の解説](https://nkon.github.io/Rust-Rtos/)
 * [GDBメモ1](https://nkon.github.io/Gdb-basic/)
 * [GDBメモ2](https://nkon.github.io/Gdb-Memo/)
-* [実装中のノート](https://nkon.github.io/CheatSheet/)
+* [Rustデータ構造メモ](https://nkon.github.io/CheatSheet/)
+* [実装中のノート](NOTE.md)
