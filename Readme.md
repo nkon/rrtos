@@ -49,3 +49,4 @@ RTOSの基本的な機能として、次のものが実装されています。
 * [GDBメモ2](https://nkon.github.io/Gdb-Memo/)
 * [Rustデータ構造メモ](https://nkon.github.io/CheatSheet/)
 * [実装中のノート](NOTE.md)
+* [DeepWiki.comによるドキュメント](https://deepwiki.com/nkon/rrtos)
